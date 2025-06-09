@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "56882429104",
+    "project_id": "yahdsell",
+    "storage_bucket": "yahdsell.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:56882429104:android:4bacb3b4f17d051410cf75",
+        "android_client_info": {
+          "package_name": "com.gari.yahdsell2"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBsBWWTmi2H9EmAOgzg_8fAzSszvB0jCIg"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

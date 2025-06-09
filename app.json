@@ -7,7 +7,9 @@
     "icon": "./assets/images/icon.png",
     "scheme": "yahdsell2",
     "userInterfaceStyle": "automatic",
-    "newArchEnabled": true,
+    
+    
+
     "ios": {
       "supportsTablet": true
     },
@@ -16,15 +18,22 @@
         "foregroundImage": "./assets/images/adaptive-icon.png",
         "backgroundColor": "#ffffff"
       },
-      "edgeToEdgeEnabled": true
+      "permissions": [
+        "READ_EXTERNAL_STORAGE",
+        "WRITE_EXTERNAL_STORAGE",
+        "ACCESS_FINE_LOCATION",
+        "ACCESS_COARSE_LOCATION"
+      ],
+      "edgeToEdgeEnabled": true,
+      "package": "com.gari.yahdsell2",
+      "googleServicesFile": "./google-services.json"
     },
     "web": {
       "bundler": "metro",
-      "output": "static",
+      "output": "single",
       "favicon": "./assets/images/favicon.png"
     },
     "plugins": [
-      "expo-router",
       [
         "expo-splash-screen",
         {
@@ -33,10 +42,19 @@
           "resizeMode": "contain",
           "backgroundColor": "#ffffff"
         }
-      ]
+      ],
+      "sentry-expo"
     ],
     "experiments": {
       "typedRoutes": true
-    }
+    },
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "5d2d393a-0c69-4d92-8639-736de4f26cbd"
+      },
+      "expoConfig": {}
+    },
+    "owner": "gari"
   }
 }
