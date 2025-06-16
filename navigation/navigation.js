@@ -126,9 +126,10 @@ async function registerForPushNotificationsAsync(userId) {
 
 Notifications.setNotificationHandler({
   handleNotification: async () => ({
-    shouldShowAlert: true,
-    shouldPlaySound: true,
-    shouldSetBadge: false, // Typically handled server-side or by app logic
+       shouldPlaySound: true,
+    shouldSetBadge: true,
+    shouldShowBanner: true,
+    shouldShowList: true,
   }),
 });
 // --- End Push Notification Helper Functions ---

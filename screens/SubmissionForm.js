@@ -1,4 +1,4 @@
-// screens/SubmissionForm.js (With AI Description Suggestion - Hints Added)
+// screens/SubmissionForm.js (With Video Upload)
 
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { useNavigation } from '@react-navigation/native';
@@ -24,6 +24,8 @@ import {
     Text, TextInput, TouchableOpacity,
     View,
 } from 'react-native';
+// NEW: Import Video component for preview
+import { Video } from 'expo-av';
 import Toast from 'react-native-toast-message';
 import { app, auth, firestore, storage } from '../firebaseConfig'; // Ensure app is exported from firebaseConfig
 import { useTheme } from '../src/ThemeContext';
@@ -59,8 +61,9 @@ const SubmissionForm = () => {
     const [category, setCategory] = useState(PRODUCT_CATEGORIES[0]);
     const [productCondition, setProductCondition] = useState(PRODUCT_CONDITIONS[0]);
 
-    // Image State
+    // Image and Video State
     const [imageUris, setImageUris] = useState([]);
+    const [videoUri, setVideoUri] = useState(null); // NEW: State for video URI
     const [manipulatingImage, setManipulatingImage] = useState(-1);
 
     // Control and status state
@@ -74,7 +77,6 @@ const SubmissionForm = () => {
 
     const styles = useMemo(() => themedStyles(colors, isDarkMode), [colors, isDarkMode]);
 
-    // Determine if the suggest button should be enabled
     const canSuggestDescription = productName.trim() !== '' && category !== PRODUCT_CATEGORIES[0];
 
 
@@ -148,12 +150,46 @@ const SubmissionForm = () => {
         }
     }, [imageUris, manipulatingImage]);
 
+    // NEW: Function to handle video selection
+    const handleChooseVideo = useCallback(async () => {
+        setError('');
+        try {
+            const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+            if (status !== 'granted') {
+                Alert.alert('Permission Required', 'We need permission to access your videos.');
+                return;
+            }
+            let result = await ImagePicker.launchImageLibraryAsync({
+                mediaTypes: ImagePicker.MediaTypeOptions.Videos,
+                allowsEditing: true,
+                quality: 0.7, // Medium quality to keep file size down
+            });
+
+            if (!result.canceled && result.assets && result.assets.length > 0) {
+                 if (result.assets[0].duration && result.assets[0].duration > 30000) { // Limit to 30 seconds
+                    Alert.alert("Video Too Long", "Please choose a video that is 30 seconds or shorter.");
+                    return;
+                }
+                setVideoUri(result.assets[0].uri);
+            }
+        } catch (videoError) {
+            console.error("[SubmissionForm] Video Picker Error:", videoError);
+            Toast.show({ type: 'error', text1: 'Video Error', text2: 'Could not select video.' });
+            setError("Video selection failed.");
+        }
+    }, []);
+
     const handleRemoveImage = useCallback((indexToRemove) => {
         setImageUris(prevUris => prevUris.filter((_, index) => index !== indexToRemove));
     }, []);
 
+    // NEW: Function to remove the selected video
+    const handleRemoveVideo = () => {
+        setVideoUri(null);
+    };
+
     const handleSuggestDescription = async () => {
-        if (!canSuggestDescription) { // Use the derived boolean
+        if (!canSuggestDescription) {
             Toast.show({ type: 'info', text1: 'Required Info Missing', text2: 'Enter Product Name & Category for suggestions.' });
             return;
         }
@@ -167,13 +203,10 @@ const SubmissionForm = () => {
         Highlight key features and benefits for potential buyers. Aim for 2-4 sentences.`;
 
         try {
-            console.log("[SubmissionForm] Calling askGemini Cloud Function with prompt:", prompt);
             const result = await askGeminiFunc({ prompt: prompt });
 
             if (result.data && typeof result.data.reply === 'string') {
-                const suggestedDescription = result.data.reply;
-                console.log("[SubmissionForm] Received suggested description:", suggestedDescription);
-                setDescription(suggestedDescription);
+                setDescription(result.data.reply);
                 Toast.show({ type: 'success', text1: 'Description Suggested!', text2: 'Check the description field.' });
             } else {
                 throw new Error("Invalid response format from AI.");
@@ -203,6 +236,8 @@ const SubmissionForm = () => {
 
         let uploadedImageUrls = [];
         let uploadedImagePaths = [];
+        let uploadedVideoUrl = null; // NEW: Variable for video URL
+        let uploadedVideoPath = null; // NEW: Variable for video storage path
         let sellerLocationGeoPoint = null;
         let sellerAvgRating = 0;
         let sellerRatingCount = 0;
@@ -216,10 +251,11 @@ const SubmissionForm = () => {
         } catch (locError) { console.error("[SubmissionForm] Error getting location:", locError); }
 
         try {
+            // Upload images
             for (const uri of imageUris) {
                 const response = await fetch(uri);
                 const blob = await response.blob();
-                const filename = `${currentUser.uid}_${Date.now()}_${Math.random().toString(36).substring(2, 8)}.jpeg`;
+                const filename = `${currentUser.uid}_${Date.now()}_img_${Math.random().toString(36).substring(2, 8)}.jpeg`;
                 const storagePath = `product_images/${filename}`;
                 const imageRef = ref(storage, storagePath);
 
@@ -228,9 +264,23 @@ const SubmissionForm = () => {
                 uploadedImageUrls.push(downloadURL);
                 uploadedImagePaths.push(storagePath);
             }
+
+            // NEW: Upload video if it exists
+            if (videoUri) {
+                const response = await fetch(videoUri);
+                const blob = await response.blob();
+                const filename = `${currentUser.uid}_${Date.now()}_vid.mp4`;
+                const storagePath = `product_videos/${filename}`;
+                const videoRef = ref(storage, storagePath);
+
+                await uploadBytes(videoRef, blob, { contentType: 'video/mp4' });
+                uploadedVideoUrl = await getDownloadURL(videoRef);
+                uploadedVideoPath = storagePath;
+            }
+
         } catch (e) {
-            console.error("[SubmissionForm] Image Upload Error:", e);
-            Toast.show({ type: 'error', text1: 'Upload Failed', text2: 'Could not upload one or more images.', position: 'bottom' });
+            console.error("[SubmissionForm] Media Upload Error:", e);
+            Toast.show({ type: 'error', text1: 'Upload Failed', text2: 'Could not upload media.', position: 'bottom' });
             setSubmitting(false); setUploading(false); return;
         } finally {
             setUploading(false);
@@ -253,6 +303,8 @@ const SubmissionForm = () => {
                 imageUrl: uploadedImageUrls.length > 0 ? uploadedImageUrls[0] : null,
                 imageUrls: uploadedImageUrls,
                 imageStoragePaths: uploadedImagePaths,
+                videoUrl: uploadedVideoUrl, // NEW: Add video URL to Firestore
+                videoStoragePath: uploadedVideoPath, // NEW: Add video path to Firestore
                 sellerId: currentUser.uid,
                 sellerEmail: currentUser.email,
                 sellerDisplayName: currentUser.displayName || currentUser.email || 'Unknown',
@@ -265,8 +317,9 @@ const SubmissionForm = () => {
 
             await addDoc(collection(firestore, 'products'), productData);
             Toast.show({ type: 'success', text1: 'Product Submitted!', text2: 'Your item is now live.', position: 'bottom', visibilityTime: 3000 });
+            // Reset form
             setProductName(''); setDescription(''); setPrice('');
-            setImageUris([]);
+            setImageUris([]); setVideoUri(null);
             setCategory(PRODUCT_CATEGORIES[0]);
             setProductCondition(PRODUCT_CONDITIONS[0]);
             navigation.goBack();
@@ -276,7 +329,7 @@ const SubmissionForm = () => {
         } finally {
             setSubmitting(false);
         }
-    }, [productName, description, price, imageUris, category, productCondition, currentUser, navigation, canSuggestDescription]); // Added canSuggestDescription
+    }, [productName, description, price, imageUris, videoUri, category, productCondition, currentUser, navigation]);
 
     const handleSelectCategory = useCallback((selectedCat) => {
         setCategory(selectedCat);
@@ -316,7 +369,6 @@ const SubmissionForm = () => {
 
                     <TextInput style={styles.input} placeholder="Product Name" value={productName} onChangeText={setProductName} placeholderTextColor={colors.textSecondary}/>
 
-                    {/* Description Input and Suggestion Button */}
                     <View style={styles.descriptionContainer}>
                         <TextInput
                             style={[styles.input, styles.textArea, styles.descriptionInput]}
@@ -363,6 +415,7 @@ const SubmissionForm = () => {
                         <Ionicons name="chevron-down-outline" size={20} color={colors.textSecondary} />
                     </TouchableOpacity>
 
+                    {/* --- Media Upload Section --- */}
                     <View style={styles.imageManagementContainer}>
                         <Text style={styles.label}>Product Images ({imageUris.length}/{MAX_IMAGES})</Text>
                         {imageUris.length > 0 && (
@@ -390,10 +443,43 @@ const SubmissionForm = () => {
                             <Text style={styles.loadingTextSmall}>Processing image...</Text>
                         )}
                     </View>
+                    
+                    {/* NEW: Video Upload Section */}
+                    <View style={styles.imageManagementContainer}>
+                        <Text style={styles.label}>Product Video (Optional, max 30s)</Text>
+                        {videoUri ? (
+                            <View style={styles.previewImageItemContainer}>
+                                <Video
+                                    source={{ uri: videoUri }}
+                                    style={styles.previewImage}
+                                    useNativeControls
+                                    resizeMode="contain"
+                                    isLooping={false}
+                                />
+                                <TouchableOpacity
+                                    style={styles.removeImageButton}
+                                    onPress={handleRemoveVideo}
+                                    disabled={submitting}
+                                >
+                                    <Ionicons name="close-circle" size={24} color={colors.error} />
+                                </TouchableOpacity>
+                            </View>
+                        ) : (
+                             <TouchableOpacity
+                                style={[styles.imagePickerButton, {backgroundColor: colors.primaryTeal}, submitting && styles.buttonDisabled]}
+                                onPress={handleChooseVideo}
+                                disabled={submitting}
+                            >
+                                <Ionicons name="videocam-outline" size={22} color={colors.textOnPrimary || '#fff'} style={{marginRight: 8}}/>
+                                <Text style={styles.buttonText}>Add Video</Text>
+                            </TouchableOpacity>
+                        )}
+                    </View>
 
-                    {(uploading || (submitting && !uploading && imageUris.length > 0)) && <ActivityIndicator size="large" color={colors.primaryTeal} style={styles.loadingIndicator}/>}
-                    {uploading && <Text style={styles.loadingText}>Uploading images...</Text>}
-                    {submitting && !uploading && imageUris.length > 0 && <Text style={styles.loadingText}>Finalizing submission...</Text>}
+
+                    {(uploading || (submitting && !uploading && (imageUris.length > 0 || videoUri))) && <ActivityIndicator size="large" color={colors.primaryTeal} style={styles.loadingIndicator}/>}
+                    {uploading && <Text style={styles.loadingText}>Uploading media...</Text>}
+                    {submitting && !uploading && (imageUris.length > 0 || videoUri) && <Text style={styles.loadingText}>Finalizing submission...</Text>}
 
                     <TouchableOpacity
                         style={[styles.button, styles.submitButton, (submitting || manipulatingImage !== -1 || imageUris.length === 0 || isSuggestingDescription) && styles.buttonDisabled]}
@@ -456,92 +542,19 @@ const themedStyles = (colors, isDarkMode) => StyleSheet.create({
     pickerButton: { width: '100%', minHeight: 50, backgroundColor: colors.surface, borderColor: colors.border, borderWidth: 1, borderRadius: 8, paddingHorizontal: 15, marginBottom: 20, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 10, },
     pickerButtonText: { fontSize: 16, color: colors.textPrimary, },
     pickerPlaceholderText: { color: colors.textSecondary, fontStyle: 'italic' },
-
-    descriptionContainer: {
-        marginBottom: 15,
-    },
-    descriptionInput: {
-        marginBottom: 0,
-    },
-    // --- NEW: Container for suggest button and hint text ---
-    suggestButtonContainer: {
-        marginTop: 8, // Space between description input and this container
-        alignItems: 'flex-end', // Aligns button and hint text to the right
-    },
-    suggestButton: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        justifyContent: 'center',
-        backgroundColor: colors.primaryGreen,
-        paddingVertical: 8,
-        paddingHorizontal: 12,
-        borderRadius: 6,
-        // alignSelf: 'flex-end', // No longer needed here, handled by suggestButtonContainer
-        // marginTop: 8, // Moved to suggestButtonContainer
-        elevation: 2,
-        maxWidth: 150, // Prevent button from becoming too wide
-    },
-    suggestButtonText: {
-        color: colors.textOnPrimary || '#ffffff',
-        fontSize: 13,
-        fontWeight: '600',
-        marginLeft: 6,
-    },
-    // --- NEW: Style for the hint text ---
-    suggestHintText: {
-        fontSize: 12,
-        color: colors.textSecondary,
-        textAlign: 'right', // Align text to the right
-        marginTop: 4, // Space between button and hint
-        marginRight: 2, // Slight margin from the edge
-    },
-
-    imageManagementContainer: {
-        marginBottom: 20,
-        borderWidth: 1, borderColor: colors.border,
-        paddingVertical: 15, paddingHorizontal: 10,
-        borderRadius: 8, backgroundColor: colors.surfaceLight || colors.surface,
-    },
-    imagePreviewList: {
-        marginBottom: 10,
-    },
-    previewImageItemContainer: {
-        marginRight: 10,
-        position: 'relative',
-        borderWidth: 1,
-        borderColor: colors.border,
-        borderRadius: 6,
-        overflow: 'hidden',
-    },
-    previewImage: {
-        width: 100, height: 100,
-        borderRadius: 6,
-        backgroundColor: colors.border,
-    },
-    imageManipulatingOverlay: {
-        ...StyleSheet.absoluteFillObject,
-        backgroundColor: 'rgba(0,0,0,0.4)',
-        justifyContent: 'center',
-        alignItems: 'center',
-        borderRadius: 6,
-    },
-    removeImageButton: {
-        position: 'absolute',
-        top: 2,
-        right: 2,
-        backgroundColor: 'rgba(255,255,255,0.7)',
-        borderRadius: 12,
-        padding: 0,
-    },
-    imagePickerButton: {
-        backgroundColor: colors.primaryGreen,
-        paddingVertical: 10, paddingHorizontal: 20,
-        borderRadius: 8,
-        alignSelf: 'center',
-        justifyContent: 'center', alignItems: 'center',
-        minHeight: 40, flexDirection: 'row',
-        marginTop: 5,
-    },
+    descriptionContainer: { marginBottom: 15, },
+    descriptionInput: { marginBottom: 0, },
+    suggestButtonContainer: { marginTop: 8, alignItems: 'flex-end', },
+    suggestButton: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', backgroundColor: colors.primaryGreen, paddingVertical: 8, paddingHorizontal: 12, borderRadius: 6, elevation: 2, maxWidth: 150, },
+    suggestButtonText: { color: colors.textOnPrimary || '#ffffff', fontSize: 13, fontWeight: '600', marginLeft: 6, },
+    suggestHintText: { fontSize: 12, color: colors.textSecondary, textAlign: 'right', marginTop: 4, marginRight: 2, },
+    imageManagementContainer: { marginBottom: 20, borderWidth: 1, borderColor: colors.border, paddingVertical: 15, paddingHorizontal: 10, borderRadius: 8, backgroundColor: colors.surfaceLight || colors.surface, },
+    imagePreviewList: { marginBottom: 10, },
+    previewImageItemContainer: { marginRight: 10, position: 'relative', borderWidth: 1, borderColor: colors.border, borderRadius: 6, overflow: 'hidden', alignItems: 'center', justifyContent: 'center' },
+    previewImage: { width: 100, height: 100, borderRadius: 6, backgroundColor: colors.border, },
+    imageManipulatingOverlay: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0,0,0,0.4)', justifyContent: 'center', alignItems: 'center', borderRadius: 6, },
+    removeImageButton: { position: 'absolute', top: 2, right: 2, backgroundColor: 'rgba(255,255,255,0.7)', borderRadius: 12, padding: 0, },
+    imagePickerButton: { backgroundColor: colors.primaryGreen, paddingVertical: 10, paddingHorizontal: 20, borderRadius: 8, alignSelf: 'center', justifyContent: 'center', alignItems: 'center', minHeight: 40, flexDirection: 'row', marginTop: 5, },
     button: { width: '100%', height: 50, justifyContent: 'center', alignItems: 'center', borderRadius: 8, marginTop: 10, backgroundColor: colors.primaryTeal, flexDirection: 'row' },
     submitButton: { width: '100%', backgroundColor: colors.primaryTeal, },
     buttonText: { color: colors.textOnPrimary || '#ffffff', fontSize: 16, fontWeight: 'bold', textAlign: 'center', },
