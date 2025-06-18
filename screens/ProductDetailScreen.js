@@ -1,8 +1,10 @@
-// screens/ProductDetailScreen.js (Carousel Fix Attempt 3: Robust Style Handling)
+// screens/ProductDetailScreen.js (Updated to use expo-video)
 
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { useHeaderHeight } from '@react-navigation/elements';
 import { useNavigation, useRoute } from '@react-navigation/native';
+// UPDATED: Import from expo-video instead of expo-av
+import { Video } from 'expo-av';
 import {
     addDoc,
     collection,
@@ -28,7 +30,6 @@ import {
     Modal,
     Platform,
     SafeAreaView,
-    ScrollView,
     StatusBar,
     StyleSheet,
     Text,
@@ -77,11 +78,10 @@ const ProductImageCarousel = React.memo(({ images, styles: parentStyles }) => {
     const carouselRef = useRef(null);
     const numImages = images.length;
 
-    // Define default/fallback styles directly within the component or ensure parentStyles is always valid
     const defaultGalleryBackgroundColor = '#ECECEC';
     const defaultErrorTextColor = 'red';
     const defaultPlaceholderImageStyle = { width: '100%', height: '100%' };
-    const defaultGalleryOuterStyle = { height: screenWidth * 0.8, width: screenWidth, backgroundColor: '#DDD' }; // Fallback if parentStyles.galleryOuterContainer is missing
+    const defaultGalleryOuterStyle = { height: screenWidth * 0.8, width: screenWidth, backgroundColor: '#DDD' }; 
     const defaultPaginationContainerStyle = { position: 'absolute', bottom: 10, left: 0, right: 0, flexDirection: 'row', justifyContent: 'center', alignItems: 'center' };
     const defaultPaginationDotStyle = { width: 8, height: 8, borderRadius: 4, marginHorizontal: 4, backgroundColor: 'grey', opacity: 0.6 };
     const defaultActivePaginationDotStyle = { backgroundColor: 'blue', opacity: 1, width: 10, height: 10, borderRadius: 5 };
@@ -115,10 +115,9 @@ const ProductImageCarousel = React.memo(({ images, styles: parentStyles }) => {
                 />
             </View>
         );
-    }, [screenWidth, parentStyles]); // Depend on parentStyles directly
+    }, [screenWidth, parentStyles]); 
 
     if (!images || images.length === 0 || (images[0]?.id && images[0].id.startsWith('placeholder_'))) {
-        // Use optional chaining for parentStyles and provide fallbacks
         const galleryOuterStyle = parentStyles?.galleryOuterContainer || defaultGalleryOuterStyle;
         const placeholderStyle = parentStyles?.placeholderImage || defaultPlaceholderImageStyle;
         return (
@@ -128,7 +127,6 @@ const ProductImageCarousel = React.memo(({ images, styles: parentStyles }) => {
         );
     }
 
-    // Use optional chaining for parentStyles and provide fallbacks for all style accesses
     const galleryOuterContainerStyle = parentStyles?.galleryOuterContainer || defaultGalleryOuterStyle;
     const paginationContainerStyle = parentStyles?.paginationContainer || defaultPaginationContainerStyle;
     const paginationDotStyle = parentStyles?.paginationDot || defaultPaginationDotStyle;
@@ -142,7 +140,7 @@ const ProductImageCarousel = React.memo(({ images, styles: parentStyles }) => {
                 data={images}
                 renderItem={renderImageItem}
                 width={screenWidth}
-                height={screenWidth * 0.8} // Ensure this matches galleryOuterContainerStyle height
+                height={screenWidth * 0.8}
                 onSnapToItem={(index) => setActiveIndex(index)}
                 loop={numImages > 1}
                 autoPlay={false}
@@ -190,6 +188,8 @@ const ProductDetailScreen = () => {
     const [loadingProductOffers, setLoadingProductOffers] = useState(false);
     const [processingOfferId, setProcessingOfferId] = useState(null);
 
+    const videoPlayerRef = useRef(null);
+    const [videoStatus, setVideoStatus] = useState({});
 
     const styles = useMemo(() => {
         const currentColors = themeColors || {
@@ -199,23 +199,19 @@ const ProductDetailScreen = () => {
             surface: '#f8f8f8', textOnPrimary: '#ffffff', accent: '#FFCA28',
             backdrop: 'rgba(0,0,0,0.5)', surfaceLight: '#E0E0E0', errorMuted: '#EF9A9A'
         };
-        // Ensure themedStyles is always called with valid arguments
         return themedStyles(currentColors, isDarkMode || false, product?.isSold || false, screenWidth);
     }, [themeColors, isDarkMode, product?.isSold, screenWidth]);
-
-    // Ensure all callback functions are defined or stubbed if not fully implemented yet
+    
     const promptUserToLogin = useCallback((actionText) => {
-        Alert.alert( "Login Required", `You need to be logged in to ${actionText}. Please log in.`,
-            [ { text: "Cancel", onPress: () => {}, style: "cancel" },
-              { text: "Log In", onPress: () => { navigation.navigate('Login'); } }
-            ], { cancelable: true }
+        Alert.alert( "Login Required", `You need to be logged in to ${actionText}.`,
+            [ { text: "Cancel", style: "cancel" }, { text: "Log In", onPress: () => navigation.navigate('Login') } ], { cancelable: true }
         );
     }, [navigation]);
 
     const handlePrivateChat = useCallback(() => {
         if (!currentUser) { promptUserToLogin("chat with the seller"); return; }
         if (!product || !product.sellerId) { Alert.alert("Error", "Seller information missing."); return; }
-        if (currentUser.uid === product.sellerId) { Alert.alert("Your Item", "You cannot chat with yourself about this item."); return; }
+        if (currentUser.uid === product.sellerId) { Alert.alert("Your Item", "You cannot chat with yourself."); return; }
         if (product.isSold) { Alert.alert("Item Sold", "Cannot chat about a sold item."); return; }
         navigation.navigate('PrivateChat', { recipientId: product.sellerId, recipientName: sellerProfile?.displayName || product.sellerDisplayName || 'Seller' });
     }, [currentUser, product, sellerProfile, navigation, promptUserToLogin]);
@@ -225,7 +221,7 @@ const ProductDetailScreen = () => {
         if (!product || !product.sellerId) { Alert.alert("Error", "Seller information missing."); return; }
         navigation.navigate('SellerReviews', { sellerId: product.sellerId, sellerName: sellerNameForNav });
     }, [product, sellerProfile, navigation]);
-
+    
     const handleSellerNamePress = useCallback(() => {
         const sellerDisplayNameForNav = sellerProfile?.displayName || product?.sellerDisplayName || 'Seller';
         const isOwnListing = currentUser?.uid && product?.sellerId && currentUser.uid === product.sellerId;
@@ -239,21 +235,19 @@ const ProductDetailScreen = () => {
                 });
             }
         } else {
-            Alert.alert("Error", "Seller information is unavailable for this product.");
+            Alert.alert("Error", "Seller information is unavailable.");
         }
     }, [currentUser, product, sellerProfile, navigation]);
-
+    
     const handlePostComment = useCallback(async () => {
         if (!currentUser) { promptUserToLogin("post a comment"); return; }
         if (!newComment.trim()) { Toast.show({ type: 'error', text1: 'Comment cannot be empty.' }); return; }
         if (!productId) { Toast.show({ type: 'error', text1: 'Cannot post comment (missing product ID).' }); return; }
         setIsSubmittingComment(true);
         try {
-            const commenterDisplayName = currentUser.displayName || currentUser.email?.split('@')[0] || 'Anonymous User';
-            const commenterPhotoURL = currentUser.photoURL || null;
             const commentData = {
-                text: newComment.trim(), userId: currentUser.uid, userName: commenterDisplayName,
-                userPhotoURL: commenterPhotoURL, createdAt: serverTimestamp(), productId: productId,
+                text: newComment.trim(), userId: currentUser.uid, userName: currentUser.displayName || 'Anonymous',
+                userPhotoURL: currentUser.photoURL || null, createdAt: serverTimestamp(), productId: productId,
             };
             await addDoc(collection(firestore, 'products', productId, 'comments'), commentData);
             setNewComment(''); Keyboard.dismiss();
@@ -376,6 +370,7 @@ const ProductDetailScreen = () => {
             </View>
         );
     };
+
     const handleOpenOfferModal = () => {
         if (!currentUser) { promptUserToLogin("make an offer"); return; }
         if (product?.sellerId === currentUser.uid) { Alert.alert("Your Item", "You cannot make an offer on your own listing."); return; }
@@ -387,6 +382,7 @@ const ProductDetailScreen = () => {
         setOfferAmount('');
         setIsOfferModalVisible(true);
     };
+
     const handleSubmitOffer = async () => {
         if (!offerAmount.trim() || isNaN(parseFloat(offerAmount)) || parseFloat(offerAmount) <= 0) {
             Alert.alert("Invalid Amount", "Please enter a valid offer amount greater than 0."); return;
@@ -398,7 +394,7 @@ const ProductDetailScreen = () => {
             const offersCollectionRef = collection(firestore, 'products', productId, 'offers');
             const newOfferData = {
                 productId: productId, productName: product.name || 'N/A', productImageUrl: product.imageUrl || product.imageUrls?.[0] || null,
-                buyerId: currentUser.uid, buyerName: currentUser.displayName || currentUser.email?.split('@')[0] || 'Anonymous Buyer',
+                buyerId: currentUser.uid, buyerName: currentUser.displayName || 'Anonymous Buyer',
                 buyerAvatar: currentUser.photoURL || null, sellerId: product.sellerId, offerAmount: numericOfferAmount,
                 status: "pending", offerTimestamp: serverTimestamp(), lastUpdated: serverTimestamp(),
             };
@@ -410,6 +406,7 @@ const ProductDetailScreen = () => {
             Toast.show({ type: 'error', text1: 'Offer Failed', text2: e.message || 'Could not submit your offer.', position: 'bottom' });
         } finally { setIsSubmittingOffer(false); }
     };
+
     const sendSystemMessageToChat = async (buyerId, buyerName, systemMessageText) => {
         if (!currentUser || !buyerId || !product) { console.error("Cannot send system message: missing current user, buyerId, or product info."); return; }
         const chatWithBuyerId = generateChatId(currentUser.uid, buyerId);
@@ -419,13 +416,14 @@ const ProductDetailScreen = () => {
         const chatDocRef = doc(firestore, 'privateChats', chatWithBuyerId);
         try {
             await addDoc(messagesCollectionRef, newMessage);
-            const sellerName = currentUser.displayName || currentUser.email?.split('@')[0] || 'Seller';
+            const sellerName = currentUser.displayName || 'Seller';
             const sellerAvatar = currentUser.photoURL || null;
             const offerFromBuyer = productOffers.find(o => o.buyerId === buyerId);
             const buyerAvatar = offerFromBuyer?.buyerAvatar || null;
             await setDoc(chatDocRef, { lastMessage: { text: systemMessageText.length > 40 ? systemMessageText.substring(0, 37) + '...' : systemMessageText, createdAt: serverTimestamp(), senderId: 'system', }, participants: [currentUser.uid, buyerId], participantDetails: { [currentUser.uid]: { displayName: sellerName, avatar: sellerAvatar }, [buyerId]: { displayName: buyerName || 'Buyer', avatar: buyerAvatar } }, lastActivity: serverTimestamp(), }, { merge: true });
         } catch (error) { console.error("Error sending system message to chat:", error); }
     };
+
     const handleAcceptOffer = async (offer) => {
         if (!productId || !offer || !offer.id || !product) return;
         if (product.isSold) { Alert.alert("Already Sold", "This item has already been marked as sold."); return; }
@@ -441,13 +439,14 @@ const ProductDetailScreen = () => {
         } catch (e) { console.error("Error accepting offer:", e); Toast.show({ type: 'error', text1: 'Accept Failed', text2: e.message || 'Could not accept offer.', position: 'bottom' });
         } finally { setProcessingOfferId(null); }
     };
+
     const handleRejectOffer = async (offer) => {
         if (!productId || !offer || !offer.id) return;
         setProcessingOfferId(offer.id);
         try {
             const offerRef = doc(firestore, 'products', productId, 'offers', offer.id);
             await updateDoc(offerRef, { status: "rejected", sellerResponseTimestamp: serverTimestamp(), lastUpdated: serverTimestamp() });
-            const messageText = `Regarding your offer of $${offer.offerAmount.toFixed(2)} for "${product?.name || 'the item'}", the seller has decided not to accept it at this time.`;
+            const messageText = `Regarding your offer of $${product?.name || 'the item'}", the seller has decided not to accept it at this time.`;
             await sendSystemMessageToChat(offer.buyerId, offer.buyerName, messageText);
             Toast.show({ type: 'info', text1: 'Offer Rejected', text2: 'Buyer has been notified.', position: 'bottom' });
         } catch (e) { console.error("Error rejecting offer:", e); Toast.show({ type: 'error', text1: 'Reject Failed', text2: e.message || 'Could not reject offer.', position: 'bottom' });
@@ -458,6 +457,7 @@ const ProductDetailScreen = () => {
         if (currentUser.uid === offererId) { Alert.alert("Cannot Chat", "You cannot initiate a chat with yourself regarding an offer."); return; }
         navigation.navigate('PrivateChat', { recipientId: offererId, recipientName: offererName });
     };
+
     const renderProductOfferItem = ({ item: offer }) => {
         const offerDate = offer.offerTimestamp?.toDate();
         const formattedDate = offerDate ? `${offerDate.toLocaleDateString()} ${offerDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}` : 'N/A';
@@ -490,6 +490,33 @@ const ProductDetailScreen = () => {
 
         return (
             <View>
+                {product.videoUrl && (
+                    <View style={styles.videoContainer}>
+                        <Video
+                            ref={videoPlayerRef}
+                            style={styles.videoPlayer}
+                            source={{ uri: product.videoUrl }}
+                            // UPDATED: Changed resizeMode to contentFit
+                            contentFit="contain"
+                            // UPDATED: Changed onPlaybackStatusUpdate to onPlaybackStatus
+                            onPlaybackStatus={setVideoStatus}
+                        />
+                         <TouchableOpacity 
+                            style={styles.videoOverlay} 
+                            onPress={() => videoStatus.isPlaying ? videoPlayerRef.current.pauseAsync() : videoPlayerRef.current.playAsync()}
+                            activeOpacity={1}
+                         >
+                            {!videoStatus.isPlaying && (
+                               <Ionicons
+                                   name={'play-circle'}
+                                   size={60}
+                                   color="rgba(255, 255, 255, 0.85)"
+                                   style={styles.playButton}
+                               />
+                            )}
+                        </TouchableOpacity>
+                    </View>
+                )}
                 <ProductImageCarousel images={imagesToDisplay} styles={styles} />
                 {product?.isSold && ( <View style={styles.soldOverlayDetailsPage}><Text style={styles.soldOverlayText}>SOLD</Text></View> )}
                 <View style={styles.detailsContainer}>
@@ -532,7 +559,7 @@ const ProductDetailScreen = () => {
                 <View style={styles.commentsSectionHeader}><Text style={styles.commentsTitle}>Comments ({comments.length})</Text></View>
             </View>
         );
-    }, [ product, currentUser, sellerProfile, imagesToDisplay, styles, screenWidth, loadingSeller, handleSellerNamePress, handleViewSellerReviews, handlePrivateChat, existingUserOffer, loadingExistingOffer, handleOpenOfferModal, comments.length, productOffers, loadingProductOffers, processingOfferId, themeColors, renderProductOfferItem ]);
+    }, [ product, currentUser, sellerProfile, imagesToDisplay, styles, screenWidth, loadingSeller, handleSellerNamePress, handleViewSellerReviews, handlePrivateChat, existingUserOffer, loadingExistingOffer, handleOpenOfferModal, comments.length, productOffers, loadingProductOffers, processingOfferId, themeColors, renderProductOfferItem, videoStatus ]);
 
 
     if (loadingProduct && !product) { return (<SafeAreaView style={styles.centered}><ActivityIndicator size="large" color={styles.activityIndicatorText?.color || '#007bff'} /><Text style={styles.activityIndicatorText}>Loading Details...</Text></SafeAreaView>); }
@@ -544,12 +571,23 @@ const ProductDetailScreen = () => {
         <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : "height"} style={{ flex: 1 }} keyboardVerticalOffset={headerHeight} >
             <SafeAreaView style={styles.safeArea}>
                 <StatusBar barStyle={isDarkMode ? 'light-content' : 'dark-content'} backgroundColor={styles.safeArea?.backgroundColor || '#fff'} />
-                <ScrollView style={styles.scrollView} contentContainerStyle={styles.scrollViewContent} keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'on-drag'} keyboardShouldPersistTaps="handled" nestedScrollEnabled={true} directionalLockEnabled={true}>
-                    <ListHeader />
-                    {loadingComments ? ( <ActivityIndicator size="small" color={styles.activityIndicatorText?.color} style={{ marginTop: 20 }} />
-                    ) : comments.length > 0 ? ( <FlatList data={comments} renderItem={renderCommentItem} keyExtractor={(item) => item.id} scrollEnabled={false} contentContainerStyle={styles.commentsFlatListContent} />
-                    ) : ( <View style={styles.noCommentsView}><Text style={styles.noCommentsText}>No comments yet. Be the first!</Text></View> )}
-                </ScrollView>
+                <FlatList
+                    data={comments}
+                    renderItem={renderCommentItem}
+                    keyExtractor={(item) => item.id}
+                    ListHeaderComponent={<ListHeader />}
+                    ListEmptyComponent={
+                        loadingComments ? (
+                            <ActivityIndicator size="small" color={styles.activityIndicatorText?.color} style={{ marginTop: 20 }} />
+                        ) : (
+                            <View style={styles.noCommentsView}><Text style={styles.noCommentsText}>No comments yet. Be the first!</Text></View>
+                        )
+                    }
+                    contentContainerStyle={styles.commentsFlatListContent}
+                    keyboardShouldPersistTaps="handled"
+                    nestedScrollEnabled={true}
+                    directionalLockEnabled={true}
+                />
                  <Modal animationType="slide" transparent={true} visible={isOfferModalVisible} onRequestClose={() => { if (!isSubmittingOffer) setIsOfferModalVisible(false); }}>
                     <TouchableOpacity style={styles.modalOverlay} activeOpacity={1} onPressOut={() => { if (!isSubmittingOffer) setIsOfferModalVisible(false);}}>
                         <TouchableOpacity activeOpacity={1} style={styles.modalContentContainer} onPress={() => Keyboard.dismiss()}>
@@ -574,14 +612,34 @@ const ProductDetailScreen = () => {
 // Styles
 const themedStyles = (colors, isDarkMode, isProductSold, currentScreenWidth) => StyleSheet.create({
     safeArea: { flex: 1, backgroundColor: colors.background },
-    scrollView: { flex: 1 },
-    scrollViewContent: { paddingBottom: Platform.OS === 'ios' ? 70 : 80 },
-    commentsFlatListContent: { paddingBottom: 10 },
+    commentsFlatListContent: { paddingBottom: Platform.OS === 'ios' ? 70 : 80 },
     noCommentsView: { paddingHorizontal: 20, paddingVertical: 10 },
     loginToCommentContainer: { flexDirection: 'row', padding: 10, borderTopWidth: 1, borderTopColor: colors.border, backgroundColor: colors.surface, alignItems: 'center', justifyContent: 'center' },
     loginToCommentText: { color: colors.primaryTeal, textAlign: 'center', paddingVertical: 10 },
     centered: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: 20, backgroundColor: colors.background },
     activityIndicatorText: { color: colors.textPrimary, marginTop: 10 },
+    videoContainer: {
+        width: currentScreenWidth,
+        height: currentScreenWidth * 0.75, // Aspect ratio 4:3
+        backgroundColor: '#000',
+        justifyContent: 'center',
+        alignItems: 'center',
+        marginBottom: 10,
+    },
+    videoPlayer: {
+        width: '100%',
+        height: '100%',
+    },
+    videoOverlay: {
+        ...StyleSheet.absoluteFillObject,
+        justifyContent: 'center',
+        alignItems: 'center',
+    },
+    playButton: {
+        textShadowColor: 'rgba(0, 0, 0, 0.75)',
+        textShadowOffset: {width: -1, height: 1},
+        textShadowRadius: 10
+    },
     galleryOuterContainer: { height: currentScreenWidth * 0.8, width: currentScreenWidth, backgroundColor: colors.borderLight || '#e0e0e0', marginBottom: isProductSold ? 0 : 10, position: 'relative' },
     placeholderImage: { width: '100%', height: '100%' },
     paginationContainer: { position: 'absolute', bottom: 10, left: 0, right: 0, flexDirection: 'row', justifyContent: 'center', alignItems: 'center' },
@@ -635,7 +693,6 @@ const themedStyles = (colors, isDarkMode, isProductSold, currentScreenWidth) => 
     modalCancelButton: { backgroundColor: colors.surfaceLight || colors.border, color: colors.textPrimary },
     modalSubmitButton: { backgroundColor: colors.primaryGreen },
     modalButtonText: { fontSize: 16, fontWeight: 'bold', color: colors.textOnPrimary },
-
     productOffersSection: { marginTop: 20, paddingVertical: 15, backgroundColor: colors.surfaceLight || '#f9f9f9', borderTopWidth: 1, borderBottomWidth: 1, borderColor: colors.borderLight || '#e0e0e0', },
     sectionTitle: { fontSize: 18, fontWeight: 'bold', color: colors.textPrimary, marginBottom: 15, paddingHorizontal: 20, },
     offerItemContainer: { backgroundColor: colors.surface, borderRadius: 10, padding: 15, marginBottom: 12, marginHorizontal: 15, borderWidth: 1, borderColor: colors.border, shadowColor: "#000", shadowOffset: { width: 0, height: 1, }, shadowOpacity: isDarkMode ? 0.15 : 0.1, shadowRadius: 2.22, elevation: 3, },
