@@ -1,0 +1,42 @@
+diff --git a/node_modules/@react-native-firebase/firestore/lib/index.js b/node_modules/@react-native-firebase/firestore/lib/index.js
+index e95cb29..c3a749d 100644
+--- a/node_modules/@react-native-firebase/firestore/lib/index.js
++++ b/node_modules/@react-native-firebase/firestore/lib/index.js
+@@ -16,24 +16,25 @@
+  */
+ 
+ import {
++  createDeprecationProxy,
++  isAndroid,
+   isBoolean,
+   isFunction,
+   isNumber,
+   isObject,
+   isString,
+   isUndefined,
+-  isAndroid,
+-  createDeprecationProxy,
+ } from '@react-native-firebase/app/lib/common';
+-import { setReactNativeModule } from '@react-native-firebase/app/lib/internal/nativeModule';
+ import {
+   createModuleNamespace,
+   FirebaseModule,
+   getFirebaseRoot,
+-} from '@react-native-firebase/app/lib/internal';
++} from '@react-native-firebase/app/lib/internal/index.js';
++import { setReactNativeModule } from '@react-native-firebase/app/lib/internal/nativeModule';
+ import FirestoreCollectionReference from './FirestoreCollectionReference';
+ import FirestoreDocumentReference from './FirestoreDocumentReference';
+ import FirestorePath from './FirestorePath';
++import FirestorePersistentCacheIndexManager from './FirestorePersistentCacheIndexManager';
+ import FirestoreQuery from './FirestoreQuery';
+ import FirestoreQueryModifiers from './FirestoreQueryModifiers';
+ import FirestoreStatics from './FirestoreStatics';
+@@ -41,7 +42,6 @@ import FirestoreTransactionHandler from './FirestoreTransactionHandler';
+ import FirestoreWriteBatch from './FirestoreWriteBatch';
+ import version from './version';
+ import fallBackModule from './web/RNFBFirestoreModule';
+-import FirestorePersistentCacheIndexManager from './FirestorePersistentCacheIndexManager';
+ 
+ const namespace = 'firestore';
+ 

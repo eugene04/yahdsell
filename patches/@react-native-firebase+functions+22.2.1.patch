@@ -1,0 +1,23 @@
+diff --git a/node_modules/@react-native-firebase/functions/lib/index.js b/node_modules/@react-native-firebase/functions/lib/index.js
+index 0175b2c..73d80e7 100644
+--- a/node_modules/@react-native-firebase/functions/lib/index.js
++++ b/node_modules/@react-native-firebase/functions/lib/index.js
+@@ -15,15 +15,15 @@
+  *
+  */
+ 
+-import { isAndroid, isNumber } from '@react-native-firebase/app/lib/common';
++import { isAndroid, isNumber } from '@react-native-firebase/app/lib/common/index.js';
+ import {
+   createModuleNamespace,
+   FirebaseModule,
+   getFirebaseRoot,
+-} from '@react-native-firebase/app/lib/internal';
++} from '@react-native-firebase/app/lib/internal/index.js';
++import { setReactNativeModule } from '@react-native-firebase/app/lib/internal/nativeModule';
+ import HttpsError from './HttpsError';
+ import version from './version';
+-import { setReactNativeModule } from '@react-native-firebase/app/lib/internal/nativeModule';
+ import fallBackModule from './web/RNFBFunctionsModule';
+ 
+ const namespace = 'functions';

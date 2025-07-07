@@ -1,25 +1,26 @@
-// LoginScreen.js (with Password Reset)
+// screens/LoginScreen.js
 
-import React, { useState } from 'react'; // Import useMemo if using themed styles
-import {
-  ActivityIndicator,
-  Alert,
-  KeyboardAvoidingView,
-  Platform,
-  SafeAreaView,
-  StatusBar,
-  StyleSheet,
-  Text,
-  TextInput,
-  TouchableOpacity,
-  View,
-} from 'react-native';
-// Import initialized auth instance and specific functions
 import { useNavigation } from '@react-navigation/native';
-import { sendPasswordResetEmail, signInWithEmailAndPassword } from 'firebase/auth'; // Import the functions
-import { auth } from '../firebaseConfig'; // Adjust path if needed
-// Import theme hook if using themed styles
-// import { useTheme } from '../src/ThemeContext';
+import { useState } from 'react';
+import {
+    ActivityIndicator,
+    Alert,
+    KeyboardAvoidingView,
+    Platform,
+    SafeAreaView,
+    StatusBar,
+    StyleSheet,
+    Text,
+    TextInput,
+    TouchableOpacity,
+    View,
+} from 'react-native';
+
+// 1. Import the auth module from @react-native-firebase
+import { auth } from '../firebaseConfig';
+
+// NOTE: We no longer import from 'firebase/auth'.
+// All auth functions are now methods on the auth() object.
 
 const LoginScreen = () => {
     const [email, setEmail] = useState('');
@@ -27,11 +28,9 @@ const LoginScreen = () => {
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState('');
     const navigation = useNavigation();
-    // const { colors, isDarkMode } = useTheme(); // Uncomment if using themed styles
 
-    // Generate styles (useMemo if themed)
-    // const styles = useMemo(() => themedStyles(colors, isDarkMode), [colors, isDarkMode]);
-    const styles = staticStyles; // Use static styles for now
+    // The styles can remain the same.
+    const styles = staticStyles;
 
     const handleLogin = async () => {
         if (!email || !password) {
@@ -41,68 +40,69 @@ const LoginScreen = () => {
         setError('');
         setLoading(true);
         try {
-            const userCredential = await signInWithEmailAndPassword(auth, email, password);
-            console.log('User signed in successfully!', userCredential.user.uid);
-            // Navigation to Home is handled by the RootNavigator's onAuthStateChanged listener
+            // 2. Use the new syntax: auth().signInWithEmailAndPassword(...)
+            await auth().signInWithEmailAndPassword(email, password);
+            console.log('User signed in successfully!');
+            // Navigation to the main app is handled automatically by the
+            // onAuthStateChanged listener in your navigation component.
         } catch (err) {
             setLoading(false);
             console.error("Login Error:", err.code, err.message);
+            // Error codes from @react-native-firebase/auth are similar
             switch (err.code) {
                 case 'auth/invalid-email':
-                    setError('Please enter a valid email address.'); break;
+                    setError('Please enter a valid email address.');
+                    break;
                 case 'auth/user-disabled':
-                    setError('This user account has been disabled.'); break;
+                    setError('This user account has been disabled.');
+                    break;
                 case 'auth/user-not-found':
-                case 'auth/invalid-credential': // Newer SDKs might use this for both not found and wrong password
-                    setError('Incorrect email or password. Please try again.'); break;
-                // case 'auth/wrong-password': // Less common now
-                //    setError('Incorrect password. Please try again.'); break;
+                case 'auth/wrong-password':
+                case 'auth/invalid-credential': // Catches both wrong email and password
+                    setError('Incorrect email or password. Please try again.');
+                    break;
                 case 'auth/too-many-requests':
-                    setError('Too many login attempts. Please try again later.'); break;
+                    setError('Access to this account has been temporarily disabled due to many failed login attempts. You can immediately restore it by resetting your password or you can try again later.');
+                    break;
                 default:
-                    setError('Login failed. Please check credentials and try again.'); break;
+                    setError('Login failed. Please check your credentials and try again.');
+                    break;
             }
         }
-        // No need to setLoading(false) on success because component unmounts
     };
 
-    // --- Password Reset Handler ---
     const handlePasswordReset = async () => {
         if (!email) {
             Alert.alert("Email Required", "Please enter your email address in the field above first.");
             return;
         }
-        setError(''); // Clear previous errors
-        setLoading(true); // Show loading indicator
+        setError('');
+        setLoading(true);
 
         try {
-            await sendPasswordResetEmail(auth, email);
+            // 3. Use the new syntax for sending a password reset email
+            await auth().sendPasswordResetEmail(email);
             Alert.alert(
                 "Password Reset Email Sent",
-                `An email has been sent to ${email} with instructions to reset your password. Please check your inbox (and spam folder).`
+                `An email has been sent to ${email} with instructions to reset your password.`
             );
         } catch (err) {
             console.error("Password Reset Error:", err.code, err.message);
-            // Provide user-friendly errors
             switch (err.code) {
                  case 'auth/invalid-email':
-                    setError('The email address entered is not valid.'); break;
+                    setError('The email address entered is not valid.');
+                    break;
                  case 'auth/user-not-found':
-                    setError('No account found with this email address.'); break;
-                 case 'auth/missing-email': // Should be caught by our initial check, but good fallback
-                     setError('Please enter your email address first.'); break;
-                case 'auth/too-many-requests':
-                    setError('Too many requests. Please try again later.'); break;
+                    setError('No account found with this email address.');
+                    break;
                  default:
-                    setError('Failed to send password reset email. Please try again.'); break;
+                    setError('Failed to send password reset email. Please try again.');
+                    break;
             }
-            // Show the error state in the UI
-            // Alert.alert("Error", "Could not send password reset email. Please check the email address and try again.");
         } finally {
-            setLoading(false); // Hide loading indicator
+            setLoading(false);
         }
     };
-    // --- End Password Reset Handler ---
 
     return (
         <SafeAreaView style={styles.container}>
@@ -127,7 +127,6 @@ const LoginScreen = () => {
                         autoCorrect={false}
                         placeholderTextColor="#888"
                     />
-
                     <TextInput
                         style={styles.input}
                         placeholder="Password"
@@ -137,24 +136,13 @@ const LoginScreen = () => {
                         placeholderTextColor="#888"
                     />
 
-                    <TouchableOpacity
-                        style={styles.button}
-                        onPress={handleLogin}
-                        disabled={loading}
-                    >
-                        {loading ? (
-                            <ActivityIndicator size="small" color="#ffffff" />
-                        ) : (
-                            <Text style={styles.buttonText}>Log In</Text>
-                        )}
+                    <TouchableOpacity style={styles.button} onPress={handleLogin} disabled={loading}>
+                        {loading ? (<ActivityIndicator size="small" color="#ffffff" />) : (<Text style={styles.buttonText}>Log In</Text>)}
                     </TouchableOpacity>
 
-                    {/* --- Forgot Password Link --- */}
                     <TouchableOpacity onPress={handlePasswordReset} style={styles.forgotPasswordButton} disabled={loading}>
                         <Text style={styles.linkText}>Forgot Password?</Text>
                     </TouchableOpacity>
-                    {/* --- End Forgot Password Link --- */}
-
 
                     <View style={styles.footer}>
                         <Text style={styles.footerText}>Don't have an account? </Text>
@@ -168,85 +156,21 @@ const LoginScreen = () => {
     );
 };
 
-// --- Styles (Using static styles for simplicity, adapt if using theme) ---
-// const themedStyles = (colors, isDarkMode) => StyleSheet.create({ ... });
+// --- Styles ---
 const staticStyles = StyleSheet.create({
-    container: {
-        flex: 1,
-        backgroundColor: '#f8f8f8', // Example light background
-    },
-    keyboardAvoidingContainer: {
-        flex: 1,
-    },
-    innerContainer: {
-        flex: 1,
-        justifyContent: 'center',
-        alignItems: 'center',
-        paddingHorizontal: 30,
-    },
-    title: {
-        fontSize: 32,
-        fontWeight: 'bold',
-        marginBottom: 10,
-        color: '#333', // Example text color
-    },
-    subtitle: {
-        fontSize: 16,
-        color: '#666', // Example secondary text
-        marginBottom: 30,
-    },
-    input: {
-        width: '100%',
-        height: 50,
-        backgroundColor: '#ffffff',
-        borderColor: '#cccccc',
-        borderWidth: 1,
-        borderRadius: 8,
-        paddingHorizontal: 15,
-        marginBottom: 15,
-        fontSize: 16,
-        color: '#333', // Example input text color
-    },
-    button: {
-        width: '100%',
-        height: 50,
-        backgroundColor: '#007bff', // Example primary color
-        justifyContent: 'center',
-        alignItems: 'center',
-        borderRadius: 8,
-        marginTop: 10,
-    },
-    buttonText: {
-        color: '#ffffff', // Example text on primary
-        fontSize: 18,
-        fontWeight: 'bold',
-    },
-    errorText: {
-        color: 'red', // Example error color
-        marginBottom: 15,
-        fontSize: 14,
-        textAlign: 'center',
-    },
-    forgotPasswordButton: { // Style for the new button
-        marginTop: 15,
-        paddingVertical: 5, // Add some padding for easier tapping
-    },
-    footer: {
-        flexDirection: 'row',
-        marginTop: 25,
-    },
-    footerText: {
-        fontSize: 14,
-        color: '#666',
-    },
-    linkText: { // Common style for links
-        fontSize: 14,
-        color: '#007bff', // Example primary color
-        fontWeight: '600',
-    },
+    container: { flex: 1, backgroundColor: '#f8f8f8' },
+    keyboardAvoidingContainer: { flex: 1 },
+    innerContainer: { flex: 1, justifyContent: 'center', alignItems: 'center', paddingHorizontal: 30 },
+    title: { fontSize: 32, fontWeight: 'bold', marginBottom: 10, color: '#333' },
+    subtitle: { fontSize: 16, color: '#666', marginBottom: 30 },
+    input: { width: '100%', height: 50, backgroundColor: '#ffffff', borderColor: '#cccccc', borderWidth: 1, borderRadius: 8, paddingHorizontal: 15, marginBottom: 15, fontSize: 16, color: '#333' },
+    button: { width: '100%', height: 50, backgroundColor: '#007bff', justifyContent: 'center', alignItems: 'center', borderRadius: 8, marginTop: 10 },
+    buttonText: { color: '#ffffff', fontSize: 18, fontWeight: 'bold' },
+    errorText: { color: 'red', marginBottom: 15, fontSize: 14, textAlign: 'center' },
+    forgotPasswordButton: { marginTop: 15, paddingVertical: 5 },
+    footer: { flexDirection: 'row', marginTop: 25 },
+    footerText: { fontSize: 14, color: '#666' },
+    linkText: { fontSize: 14, color: '#007bff', fontWeight: '600' },
 });
-
-// Assign styles (change if using theme)
-const styles = staticStyles;
 
 export default LoginScreen;

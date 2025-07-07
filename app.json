@@ -3,12 +3,15 @@
     "name": "yahdsell2",
     "slug": "yahdsell2",
     "version": "1.0.0",
+    "jsEngine": "hermes",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
     "scheme": "yahdsell2",
     "userInterfaceStyle": "automatic",
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "bundleIdentifier": "com.gari.yahdsell2",
+      "googleServicesFile": "./GoogleService-Info.plist"
     },
     "android": {
       "adaptiveIcon": {
@@ -21,7 +24,6 @@
         "ACCESS_FINE_LOCATION",
         "ACCESS_COARSE_LOCATION"
       ],
-      "edgeToEdgeEnabled": true,
       "package": "com.gari.yahdsell2",
       "googleServicesFile": "./google-services.json"
     },
@@ -31,6 +33,11 @@
       "favicon": "./assets/images/favicon.png"
     },
     "plugins": [
+      "@react-native-firebase/app",
+      "@react-native-firebase/auth",
+      "@react-native-firebase/firestore",
+      "@react-native-firebase/functions",
+      "@react-native-firebase/storage",
       [
         "expo-splash-screen",
         {
@@ -41,7 +48,9 @@
         }
       ],
       "sentry-expo",
-      "expo-video"
+      "expo-video",
+      "expo-notifications",
+      "expo-web-browser"
     ],
     "experiments": {
       "typedRoutes": true
@@ -50,9 +59,7 @@
       "router": {},
       "eas": {
         "projectId": "5d2d393a-0c69-4d92-8639-736de4f26cbd"
-      },
-      "expoConfig": {}
-    },
-    "owner": "gari"
+      }
+    }
   }
 }

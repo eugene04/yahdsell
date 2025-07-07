@@ -1,27 +1,24 @@
 // screens/WishlistScreen.js
 
-import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import Ionicons from '@expo/vector-icons/Ionicons';
+import { useFocusEffect, useNavigation } from '@react-navigation/native';
+import { useCallback, useMemo, useState } from 'react';
 import {
-  View, Text, FlatList, StyleSheet, Image, ActivityIndicator,
-  TouchableOpacity, SafeAreaView, Alert, RefreshControl
+  ActivityIndicator, Alert, FlatList, Image, RefreshControl, SafeAreaView, StyleSheet, Text, TouchableOpacity, View
 } from 'react-native';
-import { useNavigation, useFocusEffect } from '@react-navigation/native';
-import { useTheme } from '../src/ThemeContext'; // Adjust path if needed
-import { firestore, auth } from '../firebaseConfig'; // Adjust path if needed
-import {
-  collection, doc, getDoc, onSnapshot, deleteDoc, // Firestore methods
-} from 'firebase/firestore';
-import Ionicons from '@expo/vector-icons/Ionicons'; // For remove icon
 
-// StarRating component (optional, if you want to show rating here too)
-// const StarRating = ({ ... }) => { ... };
+// 1. Import the new firebase modules
+import { auth, firestore } from '../firebaseConfig';
+import { useTheme } from '../src/ThemeContext';
 
 const WishlistScreen = () => {
   const navigation = useNavigation();
   const { colors, isDarkMode } = useTheme();
-  const currentUser = auth.currentUser;
+  
+  // 2. Use the new auth syntax to get current user
+  const currentUser = auth().currentUser;
 
-  const [wishlistItems, setWishlistItems] = useState([]); // Array of full product objects
+  const [wishlistItems, setWishlistItems] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [isRefreshing, setIsRefreshing] = useState(false);
@@ -29,23 +26,23 @@ const WishlistScreen = () => {
   // --- Fetch Wishlist Items ---
   const fetchWishlist = useCallback(() => {
     if (!currentUser) {
-      // Should be handled by navigator, but good fallback
       setError("Please log in to view your wishlist.");
+      setWishlistItems([]);
       setLoading(false);
       setIsRefreshing(false);
-      setWishlistItems([]); // Clear items if logged out
-      return () => {}; // Return empty cleanup
+      return () => {};
     }
 
-    console.log("Fetching wishlist items...");
     setLoading(true);
     setError(null);
 
-    const wishlistRef = collection(firestore, 'users', currentUser.uid, 'wishlist');
+    // 3. Update Firestore listener syntax
+    const wishlistRef = firestore()
+      .collection('users')
+      .doc(currentUser.uid)
+      .collection('wishlist');
 
-    // Listen to changes in the wishlist subcollection (IDs)
-    const unsubscribe = onSnapshot(wishlistRef, async (snapshot) => {
-      console.log(`Wishlist snapshot received with ${snapshot.size} items.`);
+    const unsubscribe = wishlistRef.onSnapshot(async (snapshot) => {
       if (snapshot.empty) {
         setWishlistItems([]);
         setLoading(false);
@@ -56,32 +53,24 @@ const WishlistScreen = () => {
       // Get product details for each ID in the wishlist
       const productPromises = snapshot.docs.map(async (wishlistDoc) => {
         const productId = wishlistDoc.id;
-        const productRef = doc(firestore, 'products', productId);
+        // Use the new syntax for getting a document
+        const productRef = firestore().collection('products').doc(productId);
         try {
-          const productSnap = await getDoc(productRef);
-          if (productSnap.exists()) {
+          const productSnap = await productRef.get();
+          if (productSnap.exists) {
             return { id: productSnap.id, ...productSnap.data() };
-          } else {
-            console.warn(`Product ${productId} from wishlist not found in products collection.`);
-            // Optionally remove missing item from wishlist here?
-            // await deleteDoc(wishlistDoc.ref);
-            return null; // Indicate item is missing
           }
+          return null;
         } catch (err) {
           console.error(`Error fetching product details for ${productId}:`, err);
-          return null; // Return null on error fetching specific item
+          return null;
         }
       });
 
-      // Wait for all product fetches to complete
-      const productsData = (await Promise.all(productPromises))
-                           .filter(item => item !== null); // Filter out nulls (missing/error items)
-
-      console.log(`Fetched details for ${productsData.length} wishlist items.`);
+      const productsData = (await Promise.all(productPromises)).filter(Boolean);
       setWishlistItems(productsData);
       setLoading(false);
       setIsRefreshing(false);
-
     }, (err) => {
       console.error("Error listening to wishlist collection:", err);
       setError("Failed to load wishlist.");
@@ -89,11 +78,9 @@ const WishlistScreen = () => {
       setIsRefreshing(false);
     });
 
-    return unsubscribe; // Cleanup listener
+    return unsubscribe;
+  }, [currentUser]);
 
-  }, [currentUser]); // Depend on currentUser
-
-  // Fetch data when screen comes into focus
   useFocusEffect(
     useCallback(() => {
       const unsubscribe = fetchWishlist();
@@ -101,22 +88,24 @@ const WishlistScreen = () => {
     }, [fetchWishlist])
   );
 
-  // --- Pull-to-refresh ---
   const onRefresh = useCallback(() => {
-    console.log("Refreshing wishlist...");
     setIsRefreshing(true);
-    const unsubscribe = fetchWishlist(); // Refetch data
-    // Cleanup isn't strictly needed as fetch handles it, but safe
-    return () => unsubscribe();
+    fetchWishlist();
   }, [fetchWishlist]);
 
   // --- Remove Item Handler ---
   const handleRemoveItem = async (productId) => {
     if (!currentUser || !productId) return;
-    console.log(`Removing item ${productId} from wishlist`);
-    const wishlistItemRef = doc(firestore, 'users', currentUser.uid, 'wishlist', productId);
+    
+    // 4. Update delete syntax
+    const wishlistItemRef = firestore()
+      .collection('users')
+      .doc(currentUser.uid)
+      .collection('wishlist')
+      .doc(productId);
+      
     try {
-      await deleteDoc(wishlistItemRef);
+      await wishlistItemRef.delete();
       // UI will update automatically via the onSnapshot listener
     } catch (error) {
       console.error("Error removing item from wishlist:", error);
@@ -138,7 +127,6 @@ const WishlistScreen = () => {
             <Text style={styles.itemSeller} numberOfLines={1}>By: {item.sellerDisplayName || 'Unknown'}</Text>
         </View>
       </TouchableOpacity>
-      {/* Remove Button */}
       <TouchableOpacity
         style={styles.removeButton}
         onPress={() => handleRemoveItem(item.id)}
@@ -162,13 +150,13 @@ const WishlistScreen = () => {
         borderRadius: 8,
         padding: 10,
         marginBottom: 10,
-        alignItems: 'center', // Align items vertically
+        alignItems: 'center',
         shadowColor: '#000', shadowOffset: { width: 0, height: 1 },
         shadowOpacity: isDarkMode ? 0.3 : 0.1, shadowRadius: 2, elevation: 2,
     },
-    itemTouchable: { // Takes up most space, navigates on press
+    itemTouchable: {
         flexDirection: 'row',
-        flex: 1, // Allow info to take available space
+        flex: 1,
         alignItems: 'center',
     },
     itemImage: {
@@ -176,24 +164,23 @@ const WishlistScreen = () => {
         backgroundColor: colors.border, marginRight: 15,
     },
     itemInfo: {
-        flex: 1, // Allow text to take available space before wrapping
+        flex: 1,
         justifyContent: 'center',
     },
     itemName: { fontSize: 15, fontWeight: 'bold', color: colors.textPrimary, marginBottom: 4, },
     itemPrice: { fontSize: 14, color: colors.primaryGreen, fontWeight: '600', marginBottom: 4, },
     itemSeller: { fontSize: 12, color: colors.textSecondary, },
     removeButton: {
-        padding: 8, // Tap area
-        marginLeft: 10, // Space from text content
+        padding: 8,
+        marginLeft: 10,
     },
   }), [colors, isDarkMode]);
 
-
   // --- Loading / Error States ---
-  if (loading && wishlistItems.length === 0) { // Show loading only initially
+  if (loading && wishlistItems.length === 0) {
     return <SafeAreaView style={styles.centered}><ActivityIndicator size="large" color={colors.primaryTeal} /></SafeAreaView>;
   }
-  if (error && wishlistItems.length === 0) { // Show error only if list is empty
+  if (error && wishlistItems.length === 0) {
     return <SafeAreaView style={styles.centered}><Text style={styles.errorText}>{error}</Text></SafeAreaView>;
   }
 

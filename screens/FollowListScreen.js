@@ -2,7 +2,6 @@
 
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { useFocusEffect, useNavigation, useRoute } from '@react-navigation/native';
-import { collection, onSnapshot, orderBy, query } from 'firebase/firestore';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
     ActivityIndicator,
@@ -14,7 +13,9 @@ import {
     Text,
     TouchableOpacity
 } from 'react-native';
-import { firestore } from '../firebaseConfig'; // Assuming auth is not directly needed here unless for current user context
+
+// 1. Import the new firebase module
+import { firestore } from '../firebaseConfig';
 import { useTheme } from '../src/ThemeContext';
 
 const FollowListScreen = () => {
@@ -22,99 +23,84 @@ const FollowListScreen = () => {
     const route = useRoute();
     const { colors, isDarkMode } = useTheme();
 
-    const { userId, listType, userName } // userId of the person whose list we are viewing
-        = route.params || {};
+    const { userId, listType, userName } = route.params || {};
 
     const [userList, setUserList] = useState([]);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState(null);
     const [isRefreshing, setIsRefreshing] = useState(false);
 
+    // Set navigation header title
     useEffect(() => {
         const titleName = userName || "User";
-        if (listType === 'followers') {
-            navigation.setOptions({ title: `${titleName}'s Followers` });
-        } else if (listType === 'following') {
-            navigation.setOptions({ title: `${titleName} is Following` });
-        } else {
-            navigation.setOptions({ title: 'User List' });
-        }
+        navigation.setOptions({
+            title: listType === 'followers' ? `${titleName}'s Followers` : `${titleName} is Following`
+        });
     }, [navigation, listType, userName]);
 
+    // --- Fetch User List ---
     const fetchUserList = useCallback(() => {
-        if (!userId || !listType || !firestore) {
-            setError("Required information (userId or listType) is missing or Firestore is unavailable.");
-            setUserList([]);
+        if (!userId || !listType) {
+            setError("Required information is missing.");
             setLoading(false);
-            setIsRefreshing(false);
             return () => {};
         }
 
-        setLoading(true);
         setError(null);
-        console.log(`[FollowListScreen] Fetching ${listType} for user: ${userId}`);
 
-        const listCollectionRef = collection(firestore, 'users', userId, listType);
-        // Assuming 'followedAt' or 'createdAt' field exists for ordering
-        const q = query(listCollectionRef, orderBy('followedAt', 'desc')); // Or 'createdAt'
+        // 2. Update Firestore query syntax
+        const listQuery = firestore()
+            .collection('users')
+            .doc(userId)
+            .collection(listType) // 'followers' or 'following'
+            .orderBy('followedAt', 'desc');
 
-        const unsubscribe = onSnapshot(q, (snapshot) => {
-            const fetchedUsers = [];
-            snapshot.forEach((doc) => {
+        const unsubscribe = listQuery.onSnapshot((snapshot) => {
+            const fetchedUsers = snapshot.docs.map((doc) => {
                 const data = doc.data();
-                // Construct user object based on denormalized data
-                // For 'followers' list, the doc.id is the follower's UID
-                // For 'following' list, the doc.id is the UID of the user being followed
-                let userData = {
-                    id: doc.id, // This is the UID of the user in the list item
-                    displayName: 'Unknown User',
-                    avatarUrl: null,
+                // The structure of the stored data determines what we extract here.
+                // Assuming we store the relevant user's name and avatar in the subcollection document.
+                return {
+                    id: doc.id, // This is the UID of the user in the list
+                    displayName: data.userName || data.followerName || 'User',
+                    avatarUrl: data.userAvatar || data.followerAvatar || null,
                 };
-
-                if (listType === 'followers') {
-                    userData.displayName = data.followerName || 'Follower';
-                    userData.avatarUrl = data.followerAvatar || null;
-                } else if (listType === 'following') {
-                    userData.displayName = data.userName || 'Following'; // Assuming 'userName' was stored
-                    userData.avatarUrl = data.userAvatar || null; // Assuming 'userAvatar' was stored
-                }
-                fetchedUsers.push(userData);
             });
             setUserList(fetchedUsers);
-            setLoading(false);
-            setIsRefreshing(false);
-            console.log(`[FollowListScreen] Fetched ${fetchedUsers.length} users for ${listType}.`);
+            if (loading) setLoading(false);
+            if (isRefreshing) setIsRefreshing(false);
         }, (err) => {
             console.error(`[FollowListScreen] Error fetching ${listType}:`, err);
-            setError(`Failed to load ${listType} list. ` + err.message);
+            setError(`Failed to load ${listType} list.`);
             setLoading(false);
             setIsRefreshing(false);
         });
 
         return unsubscribe;
-    }, [userId, listType]);
+    }, [userId, listType, loading, isRefreshing]);
 
     useFocusEffect(
         useCallback(() => {
+            if (userList.length === 0) setLoading(true);
             const unsubscribe = fetchUserList();
             return () => unsubscribe();
         }, [fetchUserList])
     );
 
     const onRefresh = useCallback(() => {
-        console.log(`[FollowListScreen] Refreshing ${listType} list...`);
         setIsRefreshing(true);
         fetchUserList();
     }, [fetchUserList]);
 
     const handleUserPress = (itemUserId, itemUserName) => {
-        // Navigate to the UserProfileScreen of the tapped user
-        navigation.push('UserProfile', { // Use push to allow navigating to multiple profiles
+        // Use push to allow navigating to multiple profiles from the list
+        navigation.push('UserProfile', {
             userId: itemUserId,
             userName: itemUserName || 'User Profile'
         });
     };
 
+    // --- Render Logic ---
     const renderUserItem = ({ item }) => (
         <TouchableOpacity
             style={styles.userItem}
@@ -130,54 +116,15 @@ const FollowListScreen = () => {
     );
 
     const styles = useMemo(() => StyleSheet.create({
-        container: {
-            flex: 1,
-            backgroundColor: colors.background,
-        },
-        centered: {
-            flex: 1,
-            justifyContent: 'center',
-            alignItems: 'center',
-            padding: 20,
-            backgroundColor: colors.background,
-        },
-        errorText: {
-            color: colors.error,
-            fontSize: 16,
-            textAlign: 'center',
-        },
-        emptyText: {
-            textAlign: 'center',
-            marginTop: 50,
-            fontSize: 16,
-            color: colors.textSecondary,
-        },
-        listContainer: {
-            paddingVertical: 10,
-        },
-        userItem: {
-            flexDirection: 'row',
-            alignItems: 'center',
-            paddingVertical: 12,
-            paddingHorizontal: 15,
-            backgroundColor: colors.surface,
-            borderBottomWidth: StyleSheet.hairlineWidth,
-            borderBottomColor: colors.border,
-        },
-        avatarImage: {
-            width: 44,
-            height: 44,
-            borderRadius: 22,
-            marginRight: 15,
-            backgroundColor: colors.border,
-        },
-        userNameText: {
-            flex: 1,
-            fontSize: 16,
-            fontWeight: '500',
-            color: colors.textPrimary,
-        },
-    }), [colors, isDarkMode]);
+        container: { flex: 1, backgroundColor: colors.background },
+        centered: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: 20 },
+        errorText: { color: colors.error, fontSize: 16, textAlign: 'center' },
+        emptyText: { textAlign: 'center', marginTop: 50, fontSize: 16, color: colors.textSecondary },
+        listContainer: { paddingVertical: 10 },
+        userItem: { flexDirection: 'row', alignItems: 'center', paddingVertical: 12, paddingHorizontal: 15, backgroundColor: colors.surface, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.border },
+        avatarImage: { width: 44, height: 44, borderRadius: 22, marginRight: 15, backgroundColor: colors.border },
+        userNameText: { flex: 1, fontSize: 16, fontWeight: '500', color: colors.textPrimary },
+    }), [colors]);
 
     if (loading && userList.length === 0) {
         return <SafeAreaView style={styles.centered}><ActivityIndicator size="large" color={colors.primaryTeal} /></SafeAreaView>;
@@ -199,14 +146,7 @@ const FollowListScreen = () => {
                     </Text>
                 }
                 contentContainerStyle={styles.listContainer}
-                refreshControl={
-                    <RefreshControl
-                        refreshing={isRefreshing}
-                        onRefresh={onRefresh}
-                        tintColor={colors.primaryTeal}
-                        colors={[colors.primaryTeal]}
-                    />
-                }
+                refreshControl={<RefreshControl refreshing={isRefreshing} onRefresh={onRefresh} tintColor={colors.primaryTeal} colors={[colors.primaryTeal]} />}
             />
         </SafeAreaView>
     );
