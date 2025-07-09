@@ -22,6 +22,10 @@
         "READ_EXTERNAL_STORAGE",
         "WRITE_EXTERNAL_STORAGE",
         "ACCESS_FINE_LOCATION",
+        "ACCESS_COARSE_LOCATION",
+        "READ_EXTERNAL_STORAGE",
+        "WRITE_EXTERNAL_STORAGE",
+        "ACCESS_FINE_LOCATION",
         "ACCESS_COARSE_LOCATION"
       ],
       "package": "com.gari.yahdsell2",
@@ -34,10 +38,6 @@
     },
     "plugins": [
       "@react-native-firebase/app",
-      "@react-native-firebase/auth",
-      "@react-native-firebase/firestore",
-      "@react-native-firebase/functions",
-      "@react-native-firebase/storage",
       [
         "expo-splash-screen",
         {
@@ -60,6 +60,12 @@
       "eas": {
         "projectId": "5d2d393a-0c69-4d92-8639-736de4f26cbd"
       }
+    },
+    "runtimeVersion": {
+      "policy": "appVersion"
+    },
+    "updates": {
+      "url": "https://u.expo.dev/5d2d393a-0c69-4d92-8639-736de4f26cbd"
     }
   }
 }

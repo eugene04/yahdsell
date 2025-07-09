@@ -4,283 +4,273 @@ import Ionicons from '@expo/vector-icons/Ionicons';
 import { useHeaderHeight } from '@react-navigation/elements';
 import { useNavigation, useRoute } from '@react-navigation/native';
 import * as ImagePicker from 'expo-image-picker';
-import { useCallback, useEffect, useLayoutEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import {
     ActivityIndicator,
     Alert,
+    FlatList,
     Image,
-    KeyboardAvoidingView,
+    Keyboard,
     Modal,
     Platform,
     SafeAreaView,
     StyleSheet,
+    Text,
+    TextInput,
     TouchableOpacity,
     View,
 } from 'react-native';
-import { Actions, GiftedChat, MessageImage, Send } from 'react-native-gifted-chat';
+import { KeyboardControllerView } from 'react-native-keyboard-controller';
 
-// Import the initialized services from your central config file
 import { auth, firestore, storage } from '../firebaseConfig';
 import { useTheme } from '../src/ThemeContext';
 
-/**
- * Helper function to create a consistent, sorted chat ID for two users.
- * @param {string} uid1 - The first user's ID.
- * @param {string} uid2 - The second user's ID.
- * @returns {string|null} The generated chat ID or null if UIDs are missing.
- */
 const generateChatId = (uid1, uid2) => {
-    if (!uid1 || !uid2) {
-        console.warn("generateChatId: One or both UIDs are missing.");
-        return null;
-    }
-    return [uid1, uid2].sort().join('_');
+  if (!uid1 || !uid2) return null;
+  return [uid1, uid2].sort().join('_');
 };
 
 const PrivateChatScreen = () => {
-    const route = useRoute();
-    const navigation = useNavigation();
-    const { colors, isDarkMode } = useTheme();
-    const headerHeight = useHeaderHeight();
+  const route = useRoute();
+  const navigation = useNavigation();
+  const { colors } = useTheme();
+  const headerHeight = useHeaderHeight();
 
-    const { recipientId, recipientName, recipientAvatar } = route.params || {};
-    const currentUser = auth().currentUser;
+  const { recipientId, recipientName, recipientAvatar } = route.params || {};
+  const currentUser = auth().currentUser;
 
-    // --- State Management ---
-    const [messages, setMessages] = useState([]);
-    const [loading, setLoading] = useState(true);
-    const [imageUploading, setImageUploading] = useState(false);
-    const [imageModalVisible, setImageModalVisible] = useState(false);
-    const [selectedImageUri, setSelectedImageUri] = useState(null);
+  const [messages, setMessages] = useState([]);
+  const [text, setText] = useState('');
+  const [loading, setLoading] = useState(true);
+  const [isSending, setIsSending] = useState(false);
+  const [imageModalVisible, setImageModalVisible] = useState(false);
+  const [selectedImageUri, setSelectedImageUri] = useState(null);
+  const flatListRef = useRef(null);
 
-    // --- Memoized Values ---
-    const chatId = useMemo(() => {
-        if (!currentUser?.uid || !recipientId) return null;
-        return generateChatId(currentUser.uid, recipientId);
-    }, [currentUser?.uid, recipientId]);
+  const chatId = useMemo(() => generateChatId(currentUser?.uid, recipientId), [currentUser?.uid, recipientId]);
 
-    // --- Effects ---
+  useLayoutEffect(() => {
+    navigation.setOptions({ title: recipientName || 'Chat' });
+  }, [navigation, recipientName]);
 
-    // Set navigation header title
-    useLayoutEffect(() => {
-        navigation.setOptions({ title: recipientName || 'Chat' });
-    }, [navigation, recipientName]);
-
-    // Fetch chat messages from Firestore
-    useEffect(() => {
-        if (!chatId) {
-            setLoading(false);
-            return;
-        }
-        
-        const messagesQuery = firestore()
-            .collection('privateChats')
-            .doc(chatId)
-            .collection('messages')
-            .orderBy('createdAt', 'desc');
-
-        const unsubscribe = messagesQuery.onSnapshot(querySnapshot => {
-            const fetchedMessages = querySnapshot.docs.map(doc => {
-                const firebaseData = doc.data();
-                return {
-                    _id: doc.id,
-                    text: firebaseData.text || '',
-                    createdAt: firebaseData.createdAt?.toDate() || new Date(),
-                    user: firebaseData.user || { _id: 'unknown' },
-                    image: firebaseData.image || null,
-                    system: firebaseData.system || false,
-                };
-            });
-            setMessages(fetchedMessages);
-            if (loading) setLoading(false);
-        }, err => {
-            console.error("Error fetching messages:", err);
-            setLoading(false);
-        });
-
-        return () => unsubscribe();
-    }, [chatId, loading]);
-
-    // --- Handlers ---
-
-    /**
-     * Handles sending a message (text or image).
-     * Updates both the message subcollection and the parent chat document metadata.
-     */
-    const onSend = useCallback(async (messagesToSend = []) => {
-        if (!currentUser) {
-            Alert.alert("Login Required", "Please log in to send a message.", [
-                { text: "Cancel" },
-                { text: "Log In", onPress: () => navigation.navigate('Login') }
-            ]);
-            return;
-        }
-        if (!chatId) return;
-
-        const message = messagesToSend[0];
-        const messageData = {
-            text: message.text || '',
-            createdAt: firestore.FieldValue.serverTimestamp(),
-            user: {
-                _id: currentUser.uid,
-                name: currentUser.displayName || 'Me',
-                avatar: currentUser.photoURL || null,
-            },
-            ...(message.image && { image: message.image }),
-        };
-
-        const chatMetadata = {
-            lastMessage: {
-                text: message.text ? message.text.substring(0, 40) : '📷 Image',
-                createdAt: firestore.FieldValue.serverTimestamp(),
-                senderId: currentUser.uid,
-            },
-            participants: [currentUser.uid, recipientId],
-            participantDetails: {
-                [currentUser.uid]: { displayName: currentUser.displayName || 'Me', avatar: currentUser.photoURL || null },
-                [recipientId]: { displayName: recipientName || 'User', avatar: recipientAvatar || null }
-            },
-            lastActivity: firestore.FieldValue.serverTimestamp(),
-        };
-        console.log("Message to send:", messageData);
-console.log("chatId:", chatId);
-
-        try {
-            const messagesCollectionRef = firestore().collection('privateChats').doc(chatId).collection('messages');
-            await messagesCollectionRef.add(messageData);
-            
-            const chatDocRef = firestore().collection('privateChats').doc(chatId);
-            await chatDocRef.set(chatMetadata, { merge: true });
-        } catch (err) {
-            console.error("Error sending message:", JSON.stringify(err, null, 2));
-
-
-            console.error("Error sending message:", err);
-            Alert.alert("Error Sending Message", err.message);
-        }
-    }, [chatId, currentUser, recipientId, recipientName, recipientAvatar, navigation]);
-
-    /**
-     * Uploads an image to Firebase Storage and then calls onSend with the image URL.
-     * @param {string} imageUri - The local URI of the image to upload.
-     */
-    const uploadImageAndSend = async (imageUri) => {
-        if (!imageUri || !currentUser || !chatId) return;
-        setImageUploading(true);
-        const filename = `${currentUser.uid}_${Date.now()}.jpg`;
-        const storagePath = `chatImages/${chatId}/${filename}`;
-        
-        try {
-            const imageRef = storage().ref(storagePath);
-            await imageRef.putFile(imageUri);
-            const downloadURL = await imageRef.getDownloadURL();
-
-            const imageMessage = {
-                _id: Math.random().toString(36).substring(7),
-                createdAt: new Date(),
-                user: { _id: currentUser.uid, avatar: currentUser.photoURL },
-                image: downloadURL,
-                text: ''
-            };
-            onSend([imageMessage]);
-        } catch (error) {
-            console.error("Error uploading image:", error);
-            Alert.alert("Image Upload Error", error.message);
-        } finally {
-            setImageUploading(false);
-        }
-    };
-
-    /**
-     * Opens the device's image library to pick an image.
-     */
-    const handlePickImage = async () => {
-        if (!currentUser) {
-            Alert.alert("Login Required", "Please log in to send an image.", [
-                { text: "Cancel" },
-                { text: "Log In", onPress: () => navigation.navigate('Login') }
-            ]);
-            return;
-        }
-        const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
-        if (status !== 'granted') { Alert.alert('Permission Required'); return; }
-        
-        let result = await ImagePicker.launchImageLibraryAsync({ allowsEditing: true, aspect: [4, 3], quality: 0.7 });
-
-        if (!result.canceled && result.assets?.[0]) {
-            uploadImageAndSend(result.assets[0].uri);
-        }
-    };
-
-    // --- Custom Render Functions for GiftedChat ---
-
-    const renderCustomMessageImage = (props) => (
-        <TouchableOpacity onPress={() => { setSelectedImageUri(props.currentMessage.image); setImageModalVisible(true); }}>
-            <MessageImage {...props} imageStyle={styles.chatImageStyle} />
-        </TouchableOpacity>
-    );
-
-    const renderActions = (props) => (
-        <Actions 
-            {...props} 
-            containerStyle={styles.actionsContainer} 
-            icon={() => <Ionicons name="add-circle-outline" size={28} color={colors.primaryTeal} />} 
-            options={{ 'Choose From Library': handlePickImage, 'Cancel': () => {} }} 
-            optionTintColor={colors.primaryTeal} 
-        />
-    );
-
-    const renderSend = (props) => (
-        <Send {...props} containerStyle={styles.sendContainer}>
-            <Ionicons name="send" size={24} color={colors.primaryTeal} />
-        </Send>
-    );
-
-    // --- Main Render Logic ---
-    const styles = useMemo(() => themedStyles(colors, isDarkMode, headerHeight), [colors, isDarkMode, headerHeight]);
-
-    if (loading) {
-        return <SafeAreaView style={styles.centered}><ActivityIndicator size="large" color={colors.primaryTeal} /></SafeAreaView>;
+  useEffect(() => {
+    if (!chatId) {
+      setLoading(false);
+      return;
     }
 
+    const messagesQuery = firestore()
+      .collection('privateChats')
+      .doc(chatId)
+      .collection('messages')
+      .orderBy('createdAt', 'desc');
+
+    const unsubscribe = messagesQuery.onSnapshot(querySnapshot => {
+      const fetchedMessages = querySnapshot.docs.map(doc => {
+        const firebaseData = doc.data();
+        return {
+          _id: doc.id,
+          text: firebaseData.text || '',
+          createdAt: firebaseData.createdAt?.toDate() || new Date(),
+          user: firebaseData.user || { _id: 'unknown' },
+          image: firebaseData.image || null,
+          system: firebaseData.system || false,
+        };
+      });
+      setMessages(fetchedMessages);
+      if (loading) setLoading(false);
+    }, err => {
+      console.error("Error fetching messages:", err);
+      setLoading(false);
+    });
+
+    return () => unsubscribe();
+  }, [chatId, loading]);
+  
+  const handleSendMessage = useCallback(async (messageText, imageUrl = null) => {
+    if (!currentUser) {
+      Alert.alert("Login Required", "Please log in to send a message.");
+      return;
+    }
+    if (!chatId) return;
+
+    setIsSending(true);
+
+    const messageData = {
+      text: messageText || '',
+      createdAt: firestore.FieldValue.serverTimestamp(),
+      user: {
+        _id: currentUser.uid,
+        name: currentUser.displayName || 'Me',
+        // FIX: Ensure photoURL is never undefined, fallback to null
+        avatar: currentUser.photoURL || null,
+      },
+      ...(imageUrl && { image: imageUrl }),
+    };
+
+    const chatMetadata = {
+      lastMessage: {
+        text: messageText ? messageText.substring(0, 40) : '📷 Image',
+        createdAt: firestore.FieldValue.serverTimestamp(),
+        senderId: currentUser.uid,
+      },
+      participants: [currentUser.uid, recipientId],
+      participantDetails: {
+        // FIX: Ensure all fields have a fallback to null instead of undefined
+        [currentUser.uid]: { 
+            displayName: currentUser.displayName || 'Me', 
+            avatar: currentUser.photoURL || null 
+        },
+        [recipientId]: { 
+            displayName: recipientName || 'User', 
+            avatar: recipientAvatar || null 
+        }
+      },
+      lastActivity: firestore.FieldValue.serverTimestamp(),
+    };
+
+    try {
+      const chatDocRef = firestore().collection('privateChats').doc(chatId);
+      const messagesCollectionRef = chatDocRef.collection('messages');
+      
+      await messagesCollectionRef.add(messageData);
+      await chatDocRef.set(chatMetadata, { merge: true });
+      
+      if (messageText) setText('');
+      Keyboard.dismiss();
+    } catch (err) {
+      console.error("Error sending message:", err);
+      Alert.alert("Error", "Could not send message.");
+    } finally {
+      setIsSending(false);
+    }
+  }, [chatId, currentUser, recipientId, recipientName, recipientAvatar]);
+
+  const handlePickImage = async () => {
+    if (!currentUser) { Alert.alert("Login Required"); return; }
+    
+    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (status !== 'granted') { Alert.alert('Permission Required'); return; }
+    
+    let result = await ImagePicker.launchImageLibraryAsync({ allowsEditing: true, quality: 0.7 });
+
+    if (!result.canceled && result.assets?.[0]) {
+      uploadImageAndSend(result.assets[0].uri);
+    }
+  };
+
+  const uploadImageAndSend = async (imageUri) => {
+    if (!imageUri || !currentUser || !chatId) return;
+    setIsSending(true);
+    const filename = `${currentUser.uid}_${Date.now()}.jpg`;
+    const storagePath = `chatImages/${chatId}/${filename}`;
+    
+    try {
+      const imageRef = storage().ref(storagePath);
+      await imageRef.putFile(imageUri);
+      const downloadURL = await imageRef.getDownloadURL();
+      await handleSendMessage(null, downloadURL);
+    } catch (error) {
+      console.error("Error uploading image:", error);
+      Alert.alert("Image Upload Error", "Could not send image.");
+      setIsSending(false);
+    }
+  };
+
+  const renderMessageItem = ({ item }) => {
+    const isUserMessage = item.user._id === currentUser?.uid;
     return (
-        <SafeAreaView style={styles.safeArea}>
-            <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === "ios" ? "padding" : "height"} keyboardVerticalOffset={headerHeight}>
-                <GiftedChat
-                    messages={messages}
-                    onSend={onSend}
-                    user={{ _id: currentUser?.uid }}
-                    renderActions={renderActions}
-                    renderSend={renderSend}
-                    renderMessageImage={renderCustomMessageImage}
-                    isTyping={imageUploading}
-                    placeholder="Type your message..."
-                    alwaysShowSend
-                    scrollToBottom
-                />
-            </KeyboardAvoidingView>
-            <Modal animationType="fade" transparent={true} visible={imageModalVisible} onRequestClose={() => setImageModalVisible(false)}>
-                <View style={styles.modalContainer}>
-                    <TouchableOpacity style={styles.closeButton} onPress={() => setImageModalVisible(false)}>
-                        <Ionicons name="close-circle" size={32} color="white" />
-                    </TouchableOpacity>
-                    <Image source={{ uri: selectedImageUri }} style={styles.fullScreenImage} resizeMode="contain" />
-                </View>
-            </Modal>
-        </SafeAreaView>
+      <View style={[styles.messageRow, isUserMessage ? styles.userMessageRow : styles.botMessageRow]}>
+        <View style={[styles.messageBubble, isUserMessage ? styles.userMessageBubble : styles.botMessageBubble]}>
+          {item.image ? (
+            <TouchableOpacity onPress={() => { setSelectedImageUri(item.image); setImageModalVisible(true); }}>
+              <Image source={{ uri: item.image }} style={styles.chatImage} />
+            </TouchableOpacity>
+          ) : (
+            <Text style={isUserMessage ? styles.userMessageText : styles.botMessageText}>
+              {item.text}
+            </Text>
+          )}
+        </View>
+      </View>
     );
+  };
+
+  const styles = useMemo(() => themedStyles(colors), [colors]);
+
+  if (loading) {
+    return <SafeAreaView style={styles.centered}><ActivityIndicator size="large" color={colors.primaryTeal} /></SafeAreaView>;
+  }
+
+  return (
+    <SafeAreaView style={styles.container}>
+      <KeyboardControllerView style={styles.container} keyboardVerticalOffset={headerHeight}>
+        <FlatList
+          ref={flatListRef}
+          data={messages}
+          renderItem={renderMessageItem}
+          keyExtractor={(item) => item._id}
+          contentContainerStyle={styles.messageList}
+          style={styles.list}
+          inverted // This is key for chat UIs
+        />
+
+        <View style={styles.inputContainer}>
+          <TouchableOpacity style={styles.actionButton} onPress={handlePickImage} disabled={isSending}>
+            <Ionicons name="add" size={28} color={colors.primaryTeal} />
+          </TouchableOpacity>
+          <TextInput
+            style={styles.textInput}
+            value={text}
+            onChangeText={setText}
+            placeholder="Type a message..."
+            placeholderTextColor={colors.textSecondary}
+            multiline
+          />
+          <TouchableOpacity
+            style={[styles.sendButton, (!text.trim() || isSending) && styles.sendButtonDisabled]}
+            onPress={() => handleSendMessage(text)}
+            disabled={!text.trim() || isSending}
+          >
+            {isSending ? <ActivityIndicator size="small" color={colors.primaryTeal} /> : <Ionicons name="arrow-up-circle" size={36} color={colors.primaryTeal} />}
+          </TouchableOpacity>
+        </View>
+      </KeyboardControllerView>
+
+      <Modal animationType="fade" transparent={true} visible={imageModalVisible} onRequestClose={() => setImageModalVisible(false)}>
+        <View style={styles.modalContainer}>
+          <TouchableOpacity style={styles.closeButton} onPress={() => setImageModalVisible(false)}>
+            <Ionicons name="close-circle" size={32} color="white" />
+          </TouchableOpacity>
+          <Image source={{ uri: selectedImageUri }} style={styles.fullScreenImage} resizeMode="contain" />
+        </View>
+      </Modal>
+    </SafeAreaView>
+  );
 };
 
-// --- Styles ---
-const themedStyles = (colors, isDarkMode, headerHeight) => StyleSheet.create({
-    safeArea: { flex: 1, backgroundColor: colors.background },
-    centered: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: colors.background },
-    actionsContainer: { width: 36, height: 36, marginLeft: 8, marginBottom: Platform.OS === 'ios' ? 4 : 8, alignItems: 'center', justifyContent: 'center' },
-    sendContainer: { justifyContent: 'center', alignItems: 'center', height: '100%', marginRight: 10 },
-    chatImageStyle: { width: 200, height: 150, borderRadius: 13, margin: 3 },
-    modalContainer: { flex: 1, backgroundColor: 'rgba(0,0,0,0.85)', justifyContent: 'center', alignItems: 'center' },
-    fullScreenImage: { width: '100%', height: '100%' },
-    closeButton: { position: 'absolute', top: Platform.OS === 'ios' ? 60 : 30, right: 15, padding: 10, zIndex: 10, backgroundColor: 'rgba(255,255,255,0.2)', borderRadius: 20 },
+const themedStyles = (colors) => StyleSheet.create({
+  container: { flex: 1, backgroundColor: colors.background },
+  centered: { flex: 1, justifyContent: 'center', alignItems: 'center' },
+  list: { flex: 1 },
+  messageList: { paddingHorizontal: 10, paddingVertical: 15 },
+  messageRow: { flexDirection: 'row', marginVertical: 4, alignItems: 'flex-end' },
+  userMessageRow: { justifyContent: 'flex-end' },
+  botMessageRow: { justifyContent: 'flex-start' },
+  messageBubble: { maxWidth: '80%', padding: 4, borderRadius: 18 },
+  userMessageBubble: { backgroundColor: colors.primaryTeal, borderBottomRightRadius: 4 },
+  botMessageBubble: { backgroundColor: colors.surface, borderBottomLeftRadius: 4 },
+  userMessageText: { color: colors.textOnPrimary || '#FFFFFF', fontSize: 16, paddingHorizontal: 10, paddingVertical: 6 },
+  botMessageText: { color: colors.textPrimary, fontSize: 16, paddingHorizontal: 10, paddingVertical: 6 },
+  chatImage: { width: 200, height: 200, borderRadius: 15 },
+  inputContainer: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 8, paddingVertical: 8, borderTopWidth: 1, borderTopColor: colors.border, backgroundColor: colors.surface },
+  actionButton: { padding: 5 },
+  textInput: { flex: 1, backgroundColor: colors.background, borderWidth: 1, borderColor: colors.border, borderRadius: 20, paddingHorizontal: 18, paddingVertical: 10, fontSize: 16, color: colors.textPrimary, maxHeight: 120, marginHorizontal: 8 },
+  sendButton: { justifyContent: 'center', alignItems: 'center' },
+  sendButtonDisabled: { opacity: 0.5 },
+  modalContainer: { flex: 1, backgroundColor: 'rgba(0,0,0,0.85)', justifyContent: 'center', alignItems: 'center' },
+  fullScreenImage: { width: '100%', height: '100%' },
+  closeButton: { position: 'absolute', top: Platform.OS === 'ios' ? 60 : 30, right: 15, padding: 10, zIndex: 10 },
 });
 
 export default PrivateChatScreen;
