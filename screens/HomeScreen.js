@@ -7,12 +7,12 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
-  Animated,
   FlatList,
   Image,
   Modal,
   Platform,
   RefreshControl,
+  Animated as RNAnimated,
   SafeAreaView,
   StatusBar,
   StyleSheet,
@@ -21,11 +21,63 @@ import {
   TouchableOpacity,
   View
 } from 'react-native';
+import Animated from 'react-native-reanimated';
 import Toast from 'react-native-toast-message';
 
-// Use the correct, modern @react-native-firebase modules
 import { auth, firestore, functions } from '../firebaseConfig';
 import { useTheme } from '../src/ThemeContext';
+
+// --- HELPER COMPONENT: CompactCountdownTimer ---
+const CompactCountdownTimer = ({ expiryTimestamp, styles }) => {
+    const { colors } = useTheme();
+    const [timeLeft, setTimeLeft] = useState('');
+    const [isLowTime, setIsLowTime] = useState(false);
+
+    useEffect(() => {
+        if (!expiryTimestamp) return;
+
+        const calculateTimeLeft = () => {
+            const now = new Date().getTime();
+            const distance = expiryTimestamp.getTime() - now;
+
+            if (distance < 0) {
+                setTimeLeft("Expired");
+                return;
+            }
+
+            const days = Math.floor(distance / (1000 * 60 * 60 * 24));
+            const hours = Math.floor((distance % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
+            const minutes = Math.floor((distance % (1000 * 60 * 60)) / (1000 * 60));
+            
+            setIsLowTime(distance < 24 * 60 * 60 * 1000);
+
+            if (days > 0) {
+                setTimeLeft(`${days}d ${hours}h left`);
+            } else if (hours > 0) {
+                setTimeLeft(`${hours}h ${minutes}m left`);
+            } else {
+                setTimeLeft(`${minutes}m left`);
+            }
+        };
+
+        calculateTimeLeft();
+        const interval = setInterval(calculateTimeLeft, 60000);
+
+        return () => clearInterval(interval);
+    }, [expiryTimestamp]);
+
+    if (!timeLeft || timeLeft === "Expired") return null;
+
+    return (
+        <View style={styles.compactCountdownContainer}>
+            <Ionicons name="time-outline" size={14} color={isLowTime ? colors.error : colors.textSecondary} />
+            <Text style={[styles.compactCountdownText, isLowTime && { color: colors.error }]}>
+                {timeLeft}
+            </Text>
+        </View>
+    );
+};
+
 
 // --- Constants ---
 const PRODUCT_CATEGORIES_WITH_ALL = [ "All Categories", "Electronics", "Clothing & Apparel", "Home & Garden", "Furniture", "Vehicles", "Books, Movies & Music", "Collectibles & Art", "Sports & Outdoors", "Toys & Hobbies", "Baby & Kids", "Health & Beauty", "Other" ];
@@ -49,6 +101,7 @@ const HomeScreen = () => {
   const [userInitial, setUserInitial] = useState('');
   const [wishlistIds, setWishlistIds] = useState(new Set());
   const [unreadNotificationsCount, setUnreadNotificationsCount] = useState(0);
+  const [userLocation, setUserLocation] = useState(null);
   
   // --- UI & Filter State ---
   const [searchQuery, setSearchQuery] = useState('');
@@ -65,7 +118,7 @@ const HomeScreen = () => {
   
   // --- Welcome Popup State ---
   const [showWelcomePopup, setShowWelcomePopup] = useState(false);
-  const popupOpacity = useRef(new Animated.Value(0)).current;
+  const popupOpacity = useRef(new RNAnimated.Value(0)).current;
   const popupTimeoutRef = useRef(null);
 
   // --- Login Gate Helper ---
@@ -113,9 +166,9 @@ const HomeScreen = () => {
     if (showWelcomePopup) {
       if (popupTimeoutRef.current) clearTimeout(popupTimeoutRef.current);
       popupOpacity.setValue(0);
-      Animated.timing(popupOpacity, { toValue: 1, duration: 400, useNativeDriver: true }).start(() => {
+      RNAnimated.timing(popupOpacity, { toValue: 1, duration: 400, useNativeDriver: true }).start(() => {
         popupTimeoutRef.current = setTimeout(() => {
-          Animated.timing(popupOpacity, { toValue: 0, duration: 400, useNativeDriver: true }).start(() => setShowWelcomePopup(false));
+          RNAnimated.timing(popupOpacity, { toValue: 0, duration: 400, useNativeDriver: true }).start(() => setShowWelcomePopup(false));
         }, 2500);
       });
     }
@@ -148,7 +201,10 @@ const HomeScreen = () => {
       let { status } = await Location.requestForegroundPermissionsAsync();
       if (status === 'granted') {
         let location = await Location.getLastKnownPositionAsync() || await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
-        fetchedLocation = location?.coords;
+        if (location?.coords) {
+            fetchedLocation = location.coords;
+            setUserLocation(fetchedLocation);
+        }
       }
     } catch (err) {
       console.warn("[HomeScreen] Location Error:", err.message);
@@ -216,7 +272,6 @@ const HomeScreen = () => {
     
     const previouslySaved = wishlistIds.has(productId);
 
-    // Optimistic UI Update
     setWishlistIds(prev => {
         const newSet = new Set(prev);
         if (previouslySaved) newSet.delete(productId);
@@ -226,12 +281,15 @@ const HomeScreen = () => {
 
     if (previouslySaved) {
         wishlistItemRef.delete().catch(() => {
-            setWishlistIds(prev => new Set(prev).add(productId)); // Revert on error
+            setWishlistIds(prev => new Set(prev).add(productId));
             Toast.show({ type: 'error', text1: 'Error removing item' });
         });
     } else {
-        wishlistItemRef.set({ savedAt: firestore.FieldValue.serverTimestamp() }).catch(() => {
-            setWishlistIds(prev => { // Revert on error
+        wishlistItemRef.set({ 
+            savedAt: firestore.FieldValue.serverTimestamp(),
+            productId: productId
+        }).catch(() => {
+            setWishlistIds(prev => {
                 const newSet = new Set(prev);
                 newSet.delete(productId);
                 return newSet;
@@ -241,21 +299,89 @@ const HomeScreen = () => {
     }
   };
 
+  const handleSaveSearch = async () => {
+    if (!requireLogin('save searches')) return;
+
+    const searchCriteria = {
+      searchQuery: searchQuery.trim().toLowerCase(),
+      category: selectedCategoryFilter !== PRODUCT_CATEGORIES_WITH_ALL[0] ? selectedCategoryFilter : null,
+      condition: selectedConditionFilter !== PRODUCT_CONDITIONS_WITH_ALL[0] ? selectedConditionFilter : null,
+      minPrice: appliedMinPrice,
+      maxPrice: appliedMaxPrice,
+    };
+    
+    const nameParts = [];
+    if (searchCriteria.searchQuery) nameParts.push(`'${searchCriteria.searchQuery}'`);
+    if (searchCriteria.category) nameParts.push(searchCriteria.category);
+    if (searchCriteria.condition) nameParts.push(searchCriteria.condition);
+    const priceParts = [];
+    if (searchCriteria.minPrice) priceParts.push(`>$${searchCriteria.minPrice}`);
+    if (searchCriteria.maxPrice) priceParts.push(`<$${searchCriteria.maxPrice}`);
+    if (priceParts.length > 0) nameParts.push(priceParts.join(' '));
+
+    const searchName = nameParts.length > 0 ? nameParts.join(', ') : 'Custom Search';
+
+    try {
+      await firestore()
+        .collection('users')
+        .doc(currentUser.uid)
+        .collection('savedSearches')
+        .add({
+          name: searchName,
+          criteria: searchCriteria,
+          createdAt: firestore.FieldValue.serverTimestamp(),
+        });
+      Toast.show({
+        type: 'success',
+        text1: 'Search Saved!',
+        text2: 'You will be notified of new matching items.',
+        position: 'bottom',
+      });
+    } catch (error) {
+      console.error("Error saving search:", error);
+      Toast.show({ type: 'error', text1: 'Could not save search.' });
+    }
+  };
+
+  const isFilterActive = useMemo(() => {
+    return (
+      searchQuery.trim() !== '' ||
+      selectedCategoryFilter !== PRODUCT_CATEGORIES_WITH_ALL[0] ||
+      selectedConditionFilter !== PRODUCT_CONDITIONS_WITH_ALL[0] ||
+      appliedMinPrice !== null ||
+      appliedMaxPrice !== null
+    );
+  }, [searchQuery, selectedCategoryFilter, selectedConditionFilter, appliedMinPrice, appliedMaxPrice]);
+
+
   // --- Render Functions ---
   const renderProductItem = ({ item }) => {
     const isSaved = wishlistIds.has(item.id);
+    const expiryTimestamp = item.createdAt?._seconds ? new Date((item.createdAt._seconds + 7 * 24 * 60 * 60) * 1000) : null;
+
     return (
       <View style={[styles.productItemContainer, item.isSold && styles.soldProductContainer]}>
-        <TouchableOpacity style={styles.productItemTouchable} onPress={() => navigation.navigate('Details', { productId: item.id })} disabled={item.isSold}>
-          <Image source={{ uri: item.imageUrl || 'https://placehold.co/150x120/e0e0e0/7f7f7f?text=No+Image' }} style={[styles.productImage, item.isSold && styles.soldProductImage]} />
+        <TouchableOpacity style={styles.productItemTouchable} onPress={() => navigation.navigate('Details', { productId: item.id, userLocation })} disabled={item.isSold}>
+          <Animated.View sharedTransitionTag={`product-image-${item.id}`}>
+            <Image source={{ uri: item.imageUrl || 'https://placehold.co/150x120/e0e0e0/7f7f7f?text=No+Image' }} style={[styles.productImage, item.isSold && styles.soldProductImage]} />
+          </Animated.View>
           {item.isSold && <View style={styles.soldBadge}><Text style={styles.soldBadgeText}>SOLD</Text></View>}
           <Text style={styles.productName} numberOfLines={2}>{item.name || 'Unnamed Product'}</Text>
           <View style={styles.sellerContainer}>
             <Text style={styles.sellerName} numberOfLines={1}>By: {item.sellerDisplayName || 'Seller'}</Text>
-            {typeof item.distanceKm === 'number' && <Text style={styles.distanceText}>~{item.distanceKm.toFixed(1)} km away</Text>}
           </View>
+           {item.distanceKm != null && (
+                <View style={styles.distanceContainer}>
+                    <Ionicons name="location-outline" size={14} color={colors.textSecondary} />
+                    <Text style={styles.distanceText}>{item.distanceKm.toFixed(1)} km away</Text>
+                </View>
+            )}
           <Text style={styles.productPrice}>${item.price?.toFixed(2) || '0.00'}</Text>
-          {item.condition && <Text style={styles.productCondition}>{item.condition}</Text>}
+          
+          {expiryTimestamp && !item.isSold && (
+            <CompactCountdownTimer expiryTimestamp={expiryTimestamp} styles={styles} />
+          )}
+
         </TouchableOpacity>
         {currentUser && !item.isSold && (
           <TouchableOpacity style={styles.saveButton} onPress={() => handleSaveToggle(item.id)}>
@@ -296,6 +422,11 @@ const HomeScreen = () => {
           <>
             <View style={styles.searchFilterSortContainer}>
               <TextInput style={styles.searchBar} placeholder="Search products, sellers..." value={searchQuery} onChangeText={setSearchQuery} placeholderTextColor={colors.textSecondary} clearButtonMode="while-editing" />
+              {isFilterActive && (
+                  <TouchableOpacity style={styles.saveSearchButton} onPress={handleSaveSearch}>
+                      <Ionicons name="bookmark-outline" size={22} color={colors.primaryTeal} />
+                  </TouchableOpacity>
+              )}
               <TouchableOpacity style={styles.filterSortButton} onPress={() => setSortModalVisible(true)}>
                 <Ionicons name="swap-vertical-outline" size={18} color={colors.primaryTeal} />
                 <Text style={styles.filterSortButtonText} numberOfLines={1}>{selectedSortOption === SORT_OPTIONS[0] ? 'Sort' : selectedSortOption.split(':')[0]}</Text>
@@ -321,11 +452,11 @@ const HomeScreen = () => {
           </View>
         }
         refreshControl={<RefreshControl refreshing={isRefreshing} onRefresh={onRefresh} tintColor={colors.primaryTeal} colors={[colors.primaryTeal]} />}
-        extraData={{ wishlistIds }}
+        extraData={{ wishlistIds, userLocation }}
       />
       
       <TouchableOpacity style={styles.fab} onPress={handleAddItemPress} activeOpacity={0.7}><Text style={styles.fabIcon}>+</Text></TouchableOpacity>
-      {showWelcomePopup && <Animated.View style={[styles.welcomePopup, { opacity: popupOpacity }]}><Text style={styles.welcomePopupText}>Welcome {currentUser?.displayName || 'Back'}!</Text></Animated.View>}
+      {showWelcomePopup && <RNAnimated.View style={[styles.welcomePopup, { opacity: popupOpacity }]}><Text style={styles.welcomePopupText}>Welcome {currentUser?.displayName || 'Back'}!</Text></RNAnimated.View>}
       
       {/* Modals */}
       <Modal transparent={true} visible={isCategoryFilterModalVisible} animationType="fade" onRequestClose={() => setCategoryFilterModalVisible(false)}>
@@ -365,6 +496,7 @@ const themedStyles = (colors, isDarkMode) => StyleSheet.create({
     notificationBadgeText: { color: 'white', fontSize: 10, fontWeight: 'bold' },
     searchFilterSortContainer: { flexDirection: 'row', paddingHorizontal: 10, paddingTop: 8, paddingBottom: 4, alignItems: 'center', backgroundColor: colors.surface, borderBottomWidth: 1, borderBottomColor: colors.border },
     searchBar: { flex: 1, height: 40, borderColor: colors.border, borderWidth: 1, borderRadius: 20, paddingHorizontal: 15, backgroundColor: colors.background, fontSize: 15, color: colors.textPrimary, marginRight: 8 },
+    saveSearchButton: { padding: 8, justifyContent: 'center', alignItems: 'center' },
     filterSortButton: { flexDirection: 'row', alignItems: 'center', backgroundColor: colors.background, paddingHorizontal: 12, paddingVertical: 8, borderRadius: 20, borderWidth: 1, borderColor: colors.border, height: 40, marginLeft: 5 },
     filterSortButtonText: { color: colors.primaryTeal, marginLeft: 4, fontSize: 13, fontWeight: '500' },
     filterButtonsRow: { flexDirection: 'row', justifyContent: 'flex-start', paddingHorizontal: 10, paddingVertical: 8, backgroundColor: colors.surface, borderBottomWidth: 1, borderBottomColor: colors.border },
@@ -386,9 +518,29 @@ const themedStyles = (colors, isDarkMode) => StyleSheet.create({
     productName: { fontSize: 14, fontWeight: '600', color: colors.textPrimary, minHeight: 34 },
     sellerContainer: { width: '100%', marginTop: 4, marginBottom: 6 },
     sellerName: { fontSize: 12, color: colors.textSecondary },
-    distanceText: { fontSize: 11, color: colors.textDisabled, fontStyle: 'italic', marginTop: 3 },
+    distanceContainer: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        marginTop: 4,
+        marginBottom: 6,
+    },
+    distanceText: {
+        marginLeft: 4,
+        fontSize: 12,
+        color: colors.textSecondary,
+    },
     productPrice: { fontSize: 14, color: colors.primaryGreen, fontWeight: 'bold', marginTop: 'auto' },
-    productCondition: { fontSize: 11, color: colors.textDisabled, fontStyle: 'italic', marginTop: 3 },
+    compactCountdownContainer: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        marginTop: 6,
+    },
+    compactCountdownText: {
+        marginLeft: 4,
+        fontSize: 12,
+        color: colors.textSecondary,
+        fontWeight: '500',
+    },
     saveButton: { position: 'absolute', top: 5, right: 5, zIndex: 1, padding: 6, backgroundColor: isDarkMode ? 'rgba(30,30,30,0.6)' : 'rgba(255,255,255,0.7)', borderRadius: 15 },
     fab: { position: 'absolute', width: 60, height: 60, borderRadius: 30, backgroundColor: colors.primaryTeal, justifyContent: 'center', alignItems: 'center', right: 25, bottom: 35, elevation: 8, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.3, shadowRadius: 3 },
     fabIcon: { fontSize: 30, color: colors.textOnPrimary },

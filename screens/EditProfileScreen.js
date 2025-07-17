@@ -1,5 +1,6 @@
 // screens/EditProfileScreen.js
 
+import Ionicons from '@expo/vector-icons/Ionicons';
 import { useNavigation } from '@react-navigation/native';
 import * as ImageManipulator from 'expo-image-manipulator';
 import * as ImagePicker from 'expo-image-picker';
@@ -17,14 +18,12 @@ import {
 } from 'react-native';
 import Toast from 'react-native-toast-message';
 
-// 1. Import the new firebase modules
 import { auth, firestore, storage } from '../firebaseConfig';
 import { useTheme } from '../src/ThemeContext';
 
 const EditProfileScreen = () => {
     const navigation = useNavigation();
     const { colors, isDarkMode } = useTheme();
-    // 2. Use new auth syntax to get current user
     const currentUser = auth().currentUser;
 
     // --- State Management ---
@@ -33,8 +32,14 @@ const EditProfileScreen = () => {
     const [displayName, setDisplayName] = useState('');
     const [bio, setBio] = useState('');
     const [currentPhotoURL, setCurrentPhotoURL] = useState(null);
-    const [newImageUri, setNewImageUri] = useState(null); // Local URI of the newly picked image
+    const [newImageUri, setNewImageUri] = useState(null);
     const [originalStoragePath, setOriginalStoragePath] = useState(null);
+    
+    // --- Verification State ---
+    const [isVerified, setIsVerified] = useState(false);
+    const [verificationRequested, setVerificationRequested] = useState(false);
+    const [isRequestingVerification, setIsRequestingVerification] = useState(false);
+
 
     // --- Data Fetching Effect ---
     useEffect(() => {
@@ -44,7 +49,6 @@ const EditProfileScreen = () => {
             return;
         }
         
-        // 3. Use new Firestore syntax to get user document
         const userDocRef = firestore().collection('users').doc(currentUser.uid);
         const unsubscribe = userDocRef.onSnapshot(docSnap => {
             if (docSnap.exists) {
@@ -53,6 +57,8 @@ const EditProfileScreen = () => {
                 setBio(data.bio || '');
                 setCurrentPhotoURL(data.profilePicUrl || currentUser.photoURL);
                 setOriginalStoragePath(data.profilePicStoragePath || null);
+                setIsVerified(data.isVerified || false);
+                setVerificationRequested(data.verificationRequested || false);
             }
             if (loading) setLoading(false);
         }, error => {
@@ -67,18 +73,29 @@ const EditProfileScreen = () => {
     // --- Handlers ---
     const handleChoosePhoto = useCallback(async () => {
         const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
-        if (status !== 'granted') { Alert.alert('Permission Required'); return; }
+        if (status !== 'granted') {
+            Alert.alert('Permission Required', 'We need permission to access your photos to update your profile picture.');
+            return;
+        }
 
-        let result = await ImagePicker.launchImageLibraryAsync({ allowsEditing: true, aspect: [1, 1], quality: 1 });
+        let result = await ImagePicker.launchImageLibraryAsync({
+            allowsEditing: true,
+            aspect: [1, 1],
+            quality: 1,
+        });
 
         if (!result.canceled && result.assets?.[0]) {
-            const manipResult = await ImageManipulator.manipulateAsync(
-                result.assets[0].uri,
-                [{ resize: { width: 400, height: 400 } }],
-                { compress: 0.8, format: ImageManipulator.SaveFormat.JPEG }
-            );
-            setNewImageUri(manipResult.uri);
-            setCurrentPhotoURL(manipResult.uri); // Preview the new image
+            try {
+                const manipResult = await ImageManipulator.manipulateAsync(
+                    result.assets[0].uri,
+                    [{ resize: { width: 400, height: 400 } }],
+                    { compress: 0.8, format: ImageManipulator.SaveFormat.JPEG }
+                );
+                setNewImageUri(manipResult.uri);
+                setCurrentPhotoURL(manipResult.uri); // Preview the new image
+            } catch (e) {
+                Toast.show({ type: 'error', text1: 'Image Error', text2: 'Could not process the selected image.' });
+            }
         }
     }, []);
 
@@ -91,27 +108,22 @@ const EditProfileScreen = () => {
         let finalStoragePath = originalStoragePath;
 
         try {
-            // Step 1: Upload New Image if one was picked
             if (newImageUri) {
                 const newPath = `profile_pictures/${currentUser.uid}.jpg`;
-                // 4. Use new Storage syntax
                 const reference = storage().ref(newPath);
                 await reference.putFile(newImageUri);
                 finalPhotoURL = await reference.getDownloadURL();
                 finalStoragePath = newPath;
-                // Delete old image if it existed and is different
                 if (originalStoragePath && originalStoragePath !== newPath) {
                     await storage().ref(originalStoragePath).delete().catch(() => {});
                 }
             }
 
-            // Step 2: Update Auth Profile
             await currentUser.updateProfile({
                 displayName: displayName.trim(),
                 photoURL: finalPhotoURL,
             });
 
-            // Step 3: Update Firestore Document
             const userDocRef = firestore().collection('users').doc(currentUser.uid);
             await userDocRef.update({
                 displayName: displayName.trim(),
@@ -131,6 +143,29 @@ const EditProfileScreen = () => {
             setSubmitting(false);
         }
     }, [displayName, bio, newImageUri, currentPhotoURL, originalStoragePath, currentUser, navigation]);
+
+    const handleRequestVerification = async () => {
+        if (!currentUser) return;
+        setIsRequestingVerification(true);
+        try {
+            const userDocRef = firestore().collection('users').doc(currentUser.uid);
+            await userDocRef.update({
+                verificationRequested: true,
+            });
+            Toast.show({
+                type: 'success',
+                text1: 'Verification Requested',
+                text2: 'Your request has been submitted for review.'
+            });
+            setVerificationRequested(true);
+        } catch (error) {
+            console.error("Error requesting verification:", error);
+            Toast.show({ type: 'error', text1: 'Request Failed', text2: 'Please try again later.' });
+        } finally {
+            setIsRequestingVerification(false);
+        }
+    };
+
 
     // --- UI ---
     const styles = useMemo(() => themedStyles(colors, isDarkMode), [colors, isDarkMode]);
@@ -154,10 +189,34 @@ const EditProfileScreen = () => {
                     <TextInput style={styles.input} placeholder="Display Name" value={displayName} onChangeText={setDisplayName} autoCapitalize="words" editable={!submitting} />
                     <TextInput style={[styles.input, styles.textArea]} placeholder="Bio (optional)" value={bio} onChangeText={setBio} multiline maxLength={150} editable={!submitting} />
                     
-                    {submitting && <ActivityIndicator size="small" color={colors.primaryTeal} style={styles.loadingIndicator}/>}
+                    <View style={styles.verificationContainer}>
+                        <Text style={styles.verificationTitle}>Verification Status</Text>
+                        {isVerified ? (
+                            <View style={styles.verificationStatusView}>
+                                <Ionicons name="shield-checkmark" size={22} color={colors.primaryGreen} />
+                                <Text style={[styles.verificationStatusText, { color: colors.primaryGreen }]}>Verified</Text>
+                            </View>
+                        ) : verificationRequested ? (
+                            <View style={styles.verificationStatusView}>
+                                <Ionicons name="time-outline" size={22} color={colors.accent} />
+                                <Text style={[styles.verificationStatusText, { color: colors.accent }]}>Request Pending Review</Text>
+                            </View>
+                        ) : (
+                            <TouchableOpacity 
+                                style={[styles.verificationButton, isRequestingVerification && styles.buttonDisabled]} 
+                                onPress={handleRequestVerification}
+                                disabled={isRequestingVerification}
+                            >
+                                {isRequestingVerification 
+                                    ? <ActivityIndicator color={colors.textOnPrimary} /> 
+                                    : <Text style={styles.verificationButtonText}>Request Verification</Text>
+                                }
+                            </TouchableOpacity>
+                        )}
+                    </View>
                     
                     <TouchableOpacity style={[styles.button, submitting && styles.buttonDisabled]} onPress={handleUpdateProfile} disabled={submitting}>
-                        <Text style={styles.buttonText}>Save Changes</Text>
+                        {submitting ? <ActivityIndicator color="#fff" /> : <Text style={styles.buttonText}>Save Changes</Text>}
                     </TouchableOpacity>
                 </ScrollView>
             </KeyboardAvoidingView>
@@ -182,6 +241,43 @@ const themedStyles = (colors, isDarkMode) => StyleSheet.create({
     buttonText: { color: colors.textOnPrimary || '#ffffff', fontSize: 18, fontWeight: 'bold' },
     buttonDisabled: { backgroundColor: colors.textDisabled },
     loadingIndicator: { marginVertical: 10 },
+    verificationContainer: {
+        width: '100%',
+        backgroundColor: colors.surface,
+        borderRadius: 8,
+        borderWidth: 1,
+        borderColor: colors.border,
+        padding: 15,
+        marginBottom: 20,
+        alignItems: 'center',
+    },
+    verificationTitle: {
+        fontSize: 16,
+        fontWeight: '600',
+        color: colors.textPrimary,
+        marginBottom: 15,
+    },
+    verificationStatusView: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        paddingVertical: 5,
+    },
+    verificationStatusText: {
+        fontSize: 16,
+        fontWeight: '500',
+        marginLeft: 8,
+    },
+    verificationButton: {
+        backgroundColor: colors.primaryTeal,
+        paddingVertical: 10,
+        paddingHorizontal: 25,
+        borderRadius: 8,
+    },
+    verificationButtonText: {
+        color: colors.textOnPrimary,
+        fontSize: 16,
+        fontWeight: 'bold',
+    },
 });
 
 export default EditProfileScreen;

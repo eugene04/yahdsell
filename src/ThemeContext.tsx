@@ -1,8 +1,9 @@
-// src/context/ThemeContext.tsx (Add type annotation)
+// src/context/ThemeContext.tsx
 
-import React, { createContext, useState, useContext, useEffect } from 'react';
-import { Appearance, useColorScheme } from 'react-native';
-import { lightColors, darkColors } from '../src/colors'; // Verify path
+import React, { createContext, useContext, useEffect, useState } from 'react';
+import { useColorScheme } from 'react-native';
+// --- FIX: Corrected the import path to be relative to the current directory ---
+import { darkColors, lightColors } from './colors';
 
 // Define shape for context data
 interface ThemeContextData {
@@ -32,17 +33,11 @@ export const ThemeProvider: React.FC<{children: React.ReactNode}> = ({ children 
   const currentThemeMode = isDarkMode ? 'dark' : 'light';
   const currentColors = isDarkMode ? darkColors : lightColors;
 
-  // --- FIX: Add explicit type annotation ---
   const providerValue: ThemeContextData = {
     theme: currentThemeMode,
     colors: currentColors,
     isDarkMode,
-    // Provide the optional function if needed by consumers, otherwise omit
-    // setTheme: (newTheme: 'light' | 'dark') => setIsDarkMode(newTheme === 'dark'),
   };
-  // --- END FIX ---
-
-  console.log("ThemeProvider providing value:", JSON.stringify(providerValue)); // Keep for debugging if needed
 
   return (
     <ThemeContext.Provider value={providerValue}>

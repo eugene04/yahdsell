@@ -42,7 +42,7 @@ const ChatBotScreen = () => {
     setMessages([
       {
         _id: 'initial-message',
-        text: 'Hello! I am the YahdSell assistant. How can I help you find the perfect second-hand item today?',
+        text: "Hi! I'm the YahdSell assistant. I can help you research product specifications before you make a purchase decision. Just ask me a question!",
         createdAt: new Date(),
         user: {
           _id: 'BOT',

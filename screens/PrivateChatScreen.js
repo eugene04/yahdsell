@@ -6,19 +6,19 @@ import { useNavigation, useRoute } from '@react-navigation/native';
 import * as ImagePicker from 'expo-image-picker';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import {
-    ActivityIndicator,
-    Alert,
-    FlatList,
-    Image,
-    Keyboard,
-    Modal,
-    Platform,
-    SafeAreaView,
-    StyleSheet,
-    Text,
-    TextInput,
-    TouchableOpacity,
-    View,
+  ActivityIndicator,
+  Alert,
+  FlatList,
+  Image,
+  Keyboard,
+  Modal,
+  Platform,
+  SafeAreaView,
+  StyleSheet,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  View,
 } from 'react-native';
 import { KeyboardControllerView } from 'react-native-keyboard-controller';
 
@@ -102,7 +102,6 @@ const PrivateChatScreen = () => {
       user: {
         _id: currentUser.uid,
         name: currentUser.displayName || 'Me',
-        // FIX: Ensure photoURL is never undefined, fallback to null
         avatar: currentUser.photoURL || null,
       },
       ...(imageUrl && { image: imageUrl }),
@@ -116,7 +115,6 @@ const PrivateChatScreen = () => {
       },
       participants: [currentUser.uid, recipientId],
       participantDetails: {
-        // FIX: Ensure all fields have a fallback to null instead of undefined
         [currentUser.uid]: { 
             displayName: currentUser.displayName || 'Me', 
             avatar: currentUser.photoURL || null 
@@ -177,20 +175,48 @@ const PrivateChatScreen = () => {
     }
   };
 
+  const formatTimestamp = (date) => {
+    if (!date) return '';
+    const now = new Date();
+    const isToday = now.toDateString() === date.toDateString();
+
+    if (isToday) {
+      // If the message is from today, show only the time.
+      return date.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+    } else {
+      // If the message is from a previous day, show the date and time.
+      return date.toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+    }
+  };
+
   const renderMessageItem = ({ item }) => {
     const isUserMessage = item.user._id === currentUser?.uid;
+
+    if (item.system) {
+        return (
+            <View style={styles.systemMessageContainer}>
+                <Text style={styles.systemMessageText}>{item.text}</Text>
+            </View>
+        );
+    }
+
     return (
       <View style={[styles.messageRow, isUserMessage ? styles.userMessageRow : styles.botMessageRow]}>
-        <View style={[styles.messageBubble, isUserMessage ? styles.userMessageBubble : styles.botMessageBubble]}>
-          {item.image ? (
-            <TouchableOpacity onPress={() => { setSelectedImageUri(item.image); setImageModalVisible(true); }}>
-              <Image source={{ uri: item.image }} style={styles.chatImage} />
-            </TouchableOpacity>
-          ) : (
-            <Text style={isUserMessage ? styles.userMessageText : styles.botMessageText}>
-              {item.text}
+        <View style={styles.messageContent}>
+            <View style={[styles.messageBubble, isUserMessage ? styles.userMessageBubble : styles.botMessageBubble]}>
+            {item.image ? (
+                <TouchableOpacity onPress={() => { setSelectedImageUri(item.image); setImageModalVisible(true); }}>
+                <Image source={{ uri: item.image }} style={styles.chatImage} />
+                </TouchableOpacity>
+            ) : (
+                <Text style={isUserMessage ? styles.userMessageText : styles.botMessageText}>
+                {item.text}
+                </Text>
+            )}
+            </View>
+            <Text style={[styles.timestampText, isUserMessage ? styles.userTimestamp : styles.botTimestamp]}>
+                {formatTimestamp(item.createdAt)}
             </Text>
-          )}
         </View>
       </View>
     );
@@ -257,12 +283,41 @@ const themedStyles = (colors) => StyleSheet.create({
   messageRow: { flexDirection: 'row', marginVertical: 4, alignItems: 'flex-end' },
   userMessageRow: { justifyContent: 'flex-end' },
   botMessageRow: { justifyContent: 'flex-start' },
-  messageBubble: { maxWidth: '80%', padding: 4, borderRadius: 18 },
+  messageContent: {
+    maxWidth: '80%',
+  },
+  messageBubble: { padding: 4, borderRadius: 18 },
   userMessageBubble: { backgroundColor: colors.primaryTeal, borderBottomRightRadius: 4 },
   botMessageBubble: { backgroundColor: colors.surface, borderBottomLeftRadius: 4 },
   userMessageText: { color: colors.textOnPrimary || '#FFFFFF', fontSize: 16, paddingHorizontal: 10, paddingVertical: 6 },
   botMessageText: { color: colors.textPrimary, fontSize: 16, paddingHorizontal: 10, paddingVertical: 6 },
   chatImage: { width: 200, height: 200, borderRadius: 15 },
+  timestampText: {
+    fontSize: 10,
+    color: colors.textDisabled,
+    marginTop: 4,
+  },
+  userTimestamp: {
+    textAlign: 'right',
+    marginRight: 8,
+  },
+  botTimestamp: {
+    textAlign: 'left',
+    marginLeft: 8,
+  },
+  systemMessageContainer: {
+    alignSelf: 'center',
+    backgroundColor: colors.surface,
+    borderRadius: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    marginVertical: 10,
+  },
+  systemMessageText: {
+    fontSize: 12,
+    color: colors.textSecondary,
+    fontStyle: 'italic',
+  },
   inputContainer: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 8, paddingVertical: 8, borderTopWidth: 1, borderTopColor: colors.border, backgroundColor: colors.surface },
   actionButton: { padding: 5 },
   textInput: { flex: 1, backgroundColor: colors.background, borderWidth: 1, borderColor: colors.border, borderRadius: 20, paddingHorizontal: 18, paddingVertical: 10, fontSize: 16, color: colors.textPrimary, maxHeight: 120, marginHorizontal: 8 },

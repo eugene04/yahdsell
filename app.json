@@ -29,7 +29,12 @@
         "ACCESS_COARSE_LOCATION"
       ],
       "package": "com.gari.yahdsell2",
-      "googleServicesFile": "./google-services.json"
+      "googleServicesFile": "./google-services.json",
+      "config": {
+        "googleMaps": {
+          "apiKey":"AIzaSyBsBWWTmi2H9EmAOgzg_8fAzSszvB0jCIg"
+        }
+      }
     },
     "web": {
       "bundler": "metro",

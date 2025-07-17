@@ -22,15 +22,69 @@ import {
     TouchableOpacity,
     View,
 } from 'react-native';
+import Animated from 'react-native-reanimated';
 import ReanimatedCarousel from 'react-native-reanimated-carousel';
 import Toast from 'react-native-toast-message';
 
-import { auth, firestore } from '../firebaseConfig';
+import { auth, firestore, functions } from '../firebaseConfig';
 import { useTheme } from '../src/ThemeContext';
 
 const { width: screenWidth } = Dimensions.get('window');
 
-// --- Helper Components ---
+const trackProductViewFunc = functions().httpsCallable('trackProductView');
+
+
+// --- HELPER COMPONENT: CountdownTimer ---
+const CountdownTimer = ({ expiryTimestamp, styles }) => {
+    const { colors } = useTheme();
+    const [timeLeft, setTimeLeft] = useState({
+        days: '00', hours: '00', minutes: '00', seconds: '00'
+    });
+    const [isLowTime, setIsLowTime] = useState(false);
+
+    useEffect(() => {
+        if (!expiryTimestamp) return;
+
+        const interval = setInterval(() => {
+            const now = new Date().getTime();
+            const distance = expiryTimestamp.getTime() - now;
+
+            if (distance < 0) {
+                setTimeLeft({ days: '00', hours: '00', minutes: '00', seconds: '00' });
+                clearInterval(interval);
+                return;
+            }
+
+            const days = Math.floor(distance / (1000 * 60 * 60 * 24));
+            const hours = Math.floor((distance % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
+            const minutes = Math.floor((distance % (1000 * 60 * 60)) / (1000 * 60));
+            const seconds = Math.floor((distance % (1000 * 60)) / 1000);
+
+            setTimeLeft({
+                days: String(days).padStart(2, '0'),
+                hours: String(hours).padStart(2, '0'),
+                minutes: String(minutes).padStart(2, '0'),
+                seconds: String(seconds).padStart(2, '0'),
+            });
+
+            setIsLowTime(distance < 24 * 60 * 60 * 1000);
+
+        }, 1000);
+
+        return () => clearInterval(interval);
+    }, [expiryTimestamp]);
+
+    return (
+        <View style={styles.countdownContainer}>
+            <Ionicons name="timer-outline" size={20} color={isLowTime ? colors.error : colors.textSecondary} style={{marginRight: 8}}/>
+            <Text style={[styles.countdownText, isLowTime && styles.lowTimeText]}>
+                {timeLeft.days}d : {timeLeft.hours}h : {timeLeft.minutes}m : {timeLeft.seconds}s
+            </Text>
+        </View>
+    );
+};
+
+// --- HELPER COMPONENT: StarRating ---
 const StarRating = ({ rating = 0, size = 16, style }) => {
     const { colors } = useTheme();
     const filledStars = Math.round(rating);
@@ -44,6 +98,7 @@ const StarRating = ({ rating = 0, size = 16, style }) => {
     );
 };
 
+// --- HELPER COMPONENT: ProductMedia ---
 const ProductMedia = React.memo(({ product, styles: parentStyles, onSavePress, isSaved }) => {
     const { colors } = useTheme();
     const [activeIndex, setActiveIndex] = useState(0);
@@ -62,7 +117,9 @@ const ProductMedia = React.memo(({ product, styles: parentStyles, onSavePress, i
         return items;
     }, [product]);
 
-    const renderMediaItem = useCallback(({ item }) => {
+    const renderMediaItem = useCallback(({ item, index }) => {
+        const isFirstImage = item.type === 'image' && (product.videoUrl ? index === 1 : index === 0);
+
         if (item.type === 'video') {
             return (
                 <View style={parentStyles.galleryItemContainer}>
@@ -70,12 +127,21 @@ const ProductMedia = React.memo(({ product, styles: parentStyles, onSavePress, i
                 </View>
             );
         }
-        return (
-            <View style={parentStyles.galleryItemContainer}>
-                <Image source={{ uri: item.uri }} style={parentStyles.galleryImage} resizeMode="contain" />
-            </View>
-        );
-    }, [parentStyles]);
+
+        if (isFirstImage) {
+            return (
+                <Animated.View sharedTransitionTag={`product-image-${product.id}`} style={parentStyles.galleryItemContainer}>
+                    <Image source={{ uri: item.uri }} style={parentStyles.galleryImage} resizeMode="contain" />
+                </Animated.View>
+            );
+        } else {
+             return (
+                <View style={parentStyles.galleryItemContainer}>
+                    <Image source={{ uri: item.uri }} style={parentStyles.galleryImage} resizeMode="contain" />
+                </View>
+            );
+        }
+    }, [parentStyles, product]);
 
     if (mediaItems.length === 0) {
         return <View style={[parentStyles.galleryOuterContainer, { justifyContent: 'center', alignItems: 'center' }]}><Text style={{ color: colors.textSecondary }}>No Media Available</Text></View>;
@@ -108,11 +174,23 @@ const ProductMedia = React.memo(({ product, styles: parentStyles, onSavePress, i
     );
 });
 
+// Haversine distance formula
+function getDistanceFromLatLonInKm(lat1, lon1, lat2, lon2) {
+    const R = 6371; // Radius of the earth in km
+    const dLat = (lat2 - lat1) * (Math.PI / 180);
+    const dLon = (lon2 - lon1) * (Math.PI / 180);
+    const a =
+        Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+        Math.cos(lat1 * (Math.PI / 180)) * Math.cos(lat2 * (Math.PI / 180)) *
+        Math.sin(dLon / 2) * Math.sin(dLon / 2);
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+    return R * c; // Distance in km
+}
 
 const ProductDetailScreen = () => {
     const route = useRoute();
     const navigation = useNavigation();
-    const { productId } = route.params || {};
+    const { productId, userLocation } = route.params || {};
     const { colors, isDarkMode } = useTheme();
 
     const currentUser = auth().currentUser;
@@ -130,32 +208,37 @@ const ProductDetailScreen = () => {
     const [userHasPendingOffer, setUserHasPendingOffer] = useState(false);
     const [processingOfferId, setProcessingOfferId] = useState(null);
     const [wishlistIds, setWishlistIds] = useState(new Set());
+    const [distance, setDistance] = useState(null);
 
     const isOwnListing = currentUser?.uid === product?.sellerId;
     const isSavedToWishlist = wishlistIds.has(productId);
 
-    // --- Login Gate Helper ---
     const requireLogin = (actionName) => {
         if (!currentUser) {
-            Alert.alert(
-                "Login Required",
-                `You must be logged in to ${actionName}.`,
-                [
-                    { text: 'Cancel', style: 'cancel' },
-                    { text: 'Log In', onPress: () => navigation.navigate('Login') },
-                ]
-            );
+            Alert.alert("Login Required", `You must be logged in to ${actionName}.`, [{ text: 'Cancel', style: 'cancel' }, { text: 'Log In', onPress: () => navigation.navigate('Login') }]);
             return false;
         }
         return true;
     };
 
-    // --- Data Fetching Effects ---
     useEffect(() => {
-        if (!productId) {
-            setLoading(false);
-            return;
-        }
+      if (productId && currentUser) {
+        trackProductViewFunc({ productId })
+          .then(result => {
+            if (result.data.success) {
+              console.log(`View tracked for product: ${productId}`);
+            } else {
+              console.log(`View not tracked for ${productId}: ${result.data.message}`);
+            }
+          })
+          .catch(error => {
+            console.error(`Failed to track view for product ${productId}:`, error);
+          });
+      }
+    }, [productId, currentUser]);
+
+    useEffect(() => {
+        if (!productId) { setLoading(false); return; }
 
         const productRef = firestore().collection('products').doc(productId);
         const unsubscribeProduct = productRef.onSnapshot(async (docSnap) => {
@@ -164,34 +247,33 @@ const ProductDetailScreen = () => {
                 setProduct(productData);
                 navigation.setOptions({ title: productData.name || 'Product Details' });
 
+                if (productData.sellerLocation && userLocation) {
+                    const dist = getDistanceFromLatLonInKm(
+                        userLocation.latitude,
+                        userLocation.longitude,
+                        productData.sellerLocation.latitude,
+                        productData.sellerLocation.longitude
+                    );
+                    setDistance(dist);
+                }
+
                 if (productData.sellerId) {
                     const sellerSnap = await firestore().collection('users').doc(productData.sellerId).get();
                     if (sellerSnap.exists) setSellerProfile({ uid: sellerSnap.id, ...sellerSnap.data() });
 
-                    const otherProductsQuery = firestore().collection('products')
-                        .where('sellerId', '==', productData.sellerId)
-                        .where(firestore.FieldPath.documentId(), '!=', productId)
-                        .limit(6);
+                    const otherProductsQuery = firestore().collection('products').where('sellerId', '==', productData.sellerId).where(firestore.FieldPath.documentId(), '!=', productId).limit(6);
                     const otherProductsSnap = await otherProductsQuery.get();
                     setOtherProducts(otherProductsSnap.docs.map(d => ({ id: d.id, ...d.data() })));
                 }
-            } else {
-                setProduct(null);
-            }
+            } else { setProduct(null); }
             setLoading(false);
         });
 
         const commentsQuery = firestore().collection('products').doc(productId).collection('comments').orderBy('createdAt', 'desc');
-        // *** FIX IS HERE ***
-        // We now convert the Firebase Timestamp to a JS Date object immediately
         const unsubscribeComments = commentsQuery.onSnapshot(q => {
             const fetchedComments = q.docs.map(doc => {
                 const data = doc.data();
-                return {
-                    id: doc.id,
-                    ...data,
-                    createdAt: data.createdAt ? data.createdAt.toDate() : new Date(),
-                };
+                return { id: doc.id, ...data, createdAt: data.createdAt ? data.createdAt.toDate() : new Date() };
             });
             setComments(fetchedComments);
         });
@@ -203,12 +285,8 @@ const ProductDetailScreen = () => {
             setUserHasPendingOffer(!!offers.find(o => o.buyerId === currentUser?.uid && o.status === 'pending'));
         });
 
-        return () => {
-            unsubscribeProduct();
-            unsubscribeComments();
-            unsubscribeOffers();
-        };
-    }, [productId, currentUser?.uid]);
+        return () => { unsubscribeProduct(); unsubscribeComments(); unsubscribeOffers(); };
+    }, [productId, currentUser?.uid, userLocation]);
 
     useFocusEffect(useCallback(() => {
         if (!currentUser) return;
@@ -217,38 +295,34 @@ const ProductDetailScreen = () => {
         return () => unsub();
     }, [currentUser]));
 
-
-    // --- Handlers ---
     const handleSaveToggle = () => {
-        if (!requireLogin('save items to your wishlist')) return;
+        if (!requireLogin('save items')) return;
         const wishlistItemRef = firestore().collection('users').doc(currentUser.uid).collection('wishlist').doc(productId);
         
         const previouslySaved = isSavedToWishlist;
         setWishlistIds(prev => {
             const newSet = new Set(prev);
-            if (previouslySaved) {
-                newSet.delete(productId);
-            } else {
-                newSet.add(productId);
-            }
+            if (previouslySaved) newSet.delete(productId);
+            else newSet.add(productId);
             return newSet;
         });
 
         if (previouslySaved) {
-            Toast.show({ type: 'info', text1: 'Removed from Wishlist' });
             wishlistItemRef.delete().catch(() => {
                 setWishlistIds(prev => new Set(prev).add(productId));
-                Toast.show({ type: 'error', text1: 'Failed to remove from wishlist.' });
+                Toast.show({ type: 'error', text1: 'Error removing item' });
             });
         } else {
-            Toast.show({ type: 'success', text1: 'Added to Wishlist!' });
-            wishlistItemRef.set({ savedAt: firestore.FieldValue.serverTimestamp() }).catch(() => {
+            wishlistItemRef.set({ 
+                savedAt: firestore.FieldValue.serverTimestamp(),
+                productId: productId 
+            }).catch(() => {
                 setWishlistIds(prev => {
                     const newSet = new Set(prev);
                     newSet.delete(productId);
                     return newSet;
                 });
-                Toast.show({ type: 'error', text1: 'Failed to add to wishlist.' });
+                Toast.show({ type: 'error', text1: 'Error saving item' });
             });
         }
     };
@@ -258,7 +332,6 @@ const ProductDetailScreen = () => {
         if (!newComment.trim()) return;
 
         setIsSubmittingComment(true);
-        
         const tempCommentId = `temp_${Date.now()}`;
         const optimisticComment = {
             id: tempCommentId,
@@ -268,6 +341,7 @@ const ProductDetailScreen = () => {
             userPhotoURL: currentUser.photoURL,
             createdAt: new Date(),
         };
+
         setComments(prev => [optimisticComment, ...prev]);
         setNewComment('');
         Keyboard.dismiss();
@@ -336,7 +410,7 @@ const ProductDetailScreen = () => {
             setProcessingOfferId(null);
         }
     };
-    
+
     const handleMessage = () => {
         if (!requireLogin('chat with the seller')) return;
         navigation.navigate('PrivateChat', {
@@ -346,7 +420,6 @@ const ProductDetailScreen = () => {
         });
     };
 
-    // --- Render Functions ---
     const renderCommentItem = ({ item }) => (
         <View style={[styles.commentItemContainer, item.id.startsWith('temp_') && { opacity: 0.6 }]}>
             <Image source={{ uri: item.userPhotoURL || 'https://placehold.co/40x40/E0E0E0/7F7F7F?text=User' }} style={styles.commentAvatar} />
@@ -375,7 +448,7 @@ const ProductDetailScreen = () => {
             )}
         </View>
     );
-    
+
     const renderOtherProductItem = ({ item }) => (
         <TouchableOpacity style={styles.otherProductCard} onPress={() => navigation.push('Details', { productId: item.id })}>
             <Image source={{ uri: item.imageUrl }} style={styles.otherProductImage} />
@@ -389,6 +462,8 @@ const ProductDetailScreen = () => {
     if (!product) return <SafeAreaView style={styles.centered}><Text style={styles.errorText}>Product not found.</Text></SafeAreaView>;
 
     const makeOfferButtonDisabled = isOwnListing || product.isSold || userHasPendingOffer;
+    
+    const expiryTimestamp = product.createdAt ? new Date(product.createdAt.toDate().getTime() + 7 * 24 * 60 * 60 * 1000) : null;
 
     return (
         <SafeAreaView style={styles.safeArea}>
@@ -398,14 +473,30 @@ const ProductDetailScreen = () => {
                 <View style={styles.detailsContainer}>
                     <Text style={styles.productName}>{product.name}</Text>
                     <Text style={styles.productPrice}>${product.price?.toFixed(2)}</Text>
+                    
+                    {expiryTimestamp && !product.isSold && (
+                        <CountdownTimer expiryTimestamp={expiryTimestamp} styles={styles} />
+                    )}
+
                     {product.condition && <Text style={styles.productCondition}>Condition: {product.condition}</Text>}
+                    {distance !== null && (
+                        <View style={styles.distanceInfoContainer}>
+                            <Ionicons name="location-outline" size={16} color={colors.textSecondary} />
+                            <Text style={styles.distanceText}>{distance.toFixed(1)} km away</Text>
+                        </View>
+                    )}
                     <Text style={styles.productDescription}>{product.description}</Text>
                 </View>
 
                 <TouchableOpacity style={styles.sellerCard} onPress={() => navigation.navigate('UserProfile', { userId: product.sellerId, userName: sellerProfile?.displayName })}>
                     <Image source={{ uri: sellerProfile?.profilePicUrl || 'https://placehold.co/50x50' }} style={styles.sellerAvatar} />
                     <View style={styles.sellerInfo}>
-                        <Text style={styles.sellerName}>{sellerProfile?.displayName || 'Seller'}</Text>
+                        <View style={styles.sellerNameContainer}>
+                            <Text style={styles.sellerName}>{sellerProfile?.displayName || 'Seller'}</Text>
+                            {sellerProfile?.isVerified && (
+                                <Ionicons name="shield-checkmark" size={16} color={colors.primaryTeal} style={styles.verificationBadge} />
+                            )}
+                        </View>
                         <StarRating rating={sellerProfile?.averageRating || 0} />
                     </View>
                     <Ionicons name="chevron-forward" size={24} color={colors.textSecondary} />
@@ -512,11 +603,46 @@ const themedStyles = (colors, isDarkMode, screenWidth) => StyleSheet.create({
     productPrice: { fontSize: 22, fontWeight: '600', color: colors.primaryGreen, marginBottom: 12 },
     productCondition: { fontSize: 14, color: colors.textSecondary, marginBottom: 15, fontStyle: 'italic' },
     productDescription: { fontSize: 16, color: colors.textPrimary, lineHeight: 24 },
+    distanceInfoContainer: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        marginTop: -5,
+        marginBottom: 15,
+    },
+    distanceText: {
+        marginLeft: 6,
+        fontSize: 14,
+        color: colors.textSecondary,
+    },
     
+    countdownContainer: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        backgroundColor: colors.surface,
+        paddingVertical: 8,
+        paddingHorizontal: 12,
+        borderRadius: 8,
+        borderWidth: 1,
+        borderColor: colors.border,
+        marginBottom: 15,
+        alignSelf: 'flex-start',
+    },
+    countdownText: {
+        fontSize: 16,
+        fontWeight: '600',
+        color: colors.textSecondary,
+        fontVariant: ['tabular-nums'],
+    },
+    lowTimeText: {
+        color: colors.error,
+    },
+
     sellerCard: { flexDirection: 'row', alignItems: 'center', padding: 15, backgroundColor: colors.surface, borderBottomWidth: 1, borderBottomColor: colors.border },
     sellerAvatar: { width: 50, height: 50, borderRadius: 25, marginRight: 15 },
     sellerInfo: { flex: 1 },
+    sellerNameContainer: { flexDirection: 'row', alignItems: 'center', marginBottom: 4 },
     sellerName: { fontSize: 16, fontWeight: 'bold', color: colors.textPrimary },
+    verificationBadge: { marginLeft: 6 },
     
     moreFromSellerSection: { paddingVertical: 20, backgroundColor: colors.surface, borderBottomWidth: 1, borderBottomColor: colors.border },
     sectionTitle: { fontSize: 18, fontWeight: 'bold', color: colors.textPrimary, marginBottom: 15, paddingHorizontal: 15 },
@@ -550,7 +676,7 @@ const themedStyles = (colors, isDarkMode, screenWidth) => StyleSheet.create({
     actionButtonText: { fontSize: 16, fontWeight: 'bold', color: colors.textOnPrimary },
     offerButton: { backgroundColor: colors.primaryGreen },
     chatButton: { backgroundColor: colors.primaryTeal },
-    disabledButton: { backgroundColor: colors.textDisabled },
+    disabledButton: { backgroundColor: colors.border },
     disabledButtonText: { color: colors.textSecondary },
 
     modalOverlay: { flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(0,0,0,0.5)' },

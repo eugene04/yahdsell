@@ -1,4 +1,4 @@
-// navigation/index.js
+// navigation/navigation.js
 
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
@@ -12,13 +12,14 @@ import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { useEffect, useMemo, useState } from 'react';
 import { ActivityIndicator, Alert, Platform, StatusBar, StyleSheet, View } from 'react-native';
 
-// Import the new firebase modules
 import { auth, firestore } from '../firebaseConfig';
 import { ThemeProvider, useTheme } from '../src/ThemeContext';
 
+import * as Linking from 'expo-linking';
 import * as Notifications from 'expo-notifications';
 
-// Import Screens (no changes here)
+// --- Import all your screens ---
+import AnalyticsScreen from '../screens/AnalyticsScreen';
 import ChatBotScreen from '../screens/ChatBotScreen';
 import ChatListScreen from '../screens/ChatListScreen';
 import EditProductScreen from '../screens/EditProductScreen';
@@ -27,9 +28,11 @@ import FollowListScreen from '../screens/FollowListScreen';
 import GroupChatScreen from '../screens/GroupChatScreen';
 import HomeScreen from '../screens/HomeScreen';
 import LoginScreen from '../screens/LoginScreen';
+import MapScreen from '../screens/MapScreen';
 import NotificationsScreen from '../screens/NotificationsScreen';
 import PrivateChatScreen from '../screens/PrivateChatScreen';
 import ProductDetailScreen from '../screens/ProductDetailScreen';
+import SavedSearchesScreen from '../screens/SavedSearchesScreen';
 import SellerReviewsScreen from '../screens/SellerReviewScreen';
 import SignupScreen from '../screens/SignupScreen';
 import SubmissionForm from '../screens/SubmissionForm';
@@ -40,14 +43,15 @@ const AuthStack = createNativeStackNavigator();
 const AppStack = createNativeStackNavigator();
 const Tab = createBottomTabNavigator();
 
-// --- Push Notification Helper Functions ---
-// This function can remain largely the same, but we'll use the new firestore() syntax.
+// --- Push Notification Setup ---
+
+// This function registers the device for push notifications and stores the token.
 async function registerForPushNotificationsAsync(userId) {
   if (!userId) {
     console.log("[PushNotifications] No user ID, skipping registration.");
     return null;
   }
-  // ... (rest of the permission logic is the same)
+  
   const { status: existingStatus } = await Notifications.getPermissionsAsync();
   let finalStatus = existingStatus;
   if (existingStatus !== 'granted') {
@@ -59,11 +63,12 @@ async function registerForPushNotificationsAsync(userId) {
     return null;
   }
   
+  // Get the Expo push token.
   const token = (await Notifications.getExpoPushTokenAsync()).data;
   
+  // Store the token in Firestore for the current user.
   if (token) {
     try {
-      // Use the new syntax for firestore
       await firestore()
         .collection('users')
         .doc(userId)
@@ -74,7 +79,7 @@ async function registerForPushNotificationsAsync(userId) {
           token: token,
           createdAt: firestore.FieldValue.serverTimestamp(),
           platform: Platform.OS,
-        });
+        }, { merge: true });
       console.log('[PushNotifications] Push token stored successfully for user:', userId);
     } catch (error) {
       console.error('[PushNotifications] Error storing push token in Firestore:', error);
@@ -83,6 +88,7 @@ async function registerForPushNotificationsAsync(userId) {
   return token;
 }
 
+// This sets how notifications are handled when the app is in the foreground.
 Notifications.setNotificationHandler({
   handleNotification: async () => ({
     shouldShowAlert: true,
@@ -90,7 +96,9 @@ Notifications.setNotificationHandler({
     shouldSetBadge: false,
   }),
 });
-// --- End Push Notification Helper Functions ---
+
+
+// --- Main Navigation Component ---
 
 const ThemedNavigation = () => {
     const [initializing, setInitializing] = useState(true);
@@ -98,7 +106,21 @@ const ThemedNavigation = () => {
     const { colors, isDarkMode } = useTheme();
     const navigationRef = useNavigationContainerRef();
 
-    // --- NEW: Auth State Listener for @react-native-firebase/auth ---
+    // --- Deep Linking Configuration ---
+    const linking = {
+        prefixes: [Linking.createURL('/')], // Uses your app's scheme (e.g., yahdsell2://)
+        config: {
+            screens: {
+                // Define paths for screens in the main AppStack
+                Details: 'product/:productId',
+                PrivateChat: 'chat/:recipientId',
+                UserProfile: 'user/:userId',
+                // Add other screens you want to deep link to here
+            },
+        },
+    };
+
+    // --- Authentication State Listener ---
     useEffect(() => {
         const subscriber = auth().onAuthStateChanged(user => {
             setUser(user);
@@ -106,31 +128,25 @@ const ThemedNavigation = () => {
                 setInitializing(false);
             }
             if (user) {
+                // Register for push notifications when user logs in
                 registerForPushNotificationsAsync(user.uid);
             }
         });
-        return subscriber; // unsubscribe on unmount
+        return subscriber; // Unsubscribe on unmount
     }, [initializing]);
 
-    // Notification tap listener (no changes needed here)
+    // --- Notification Tapped Listener (for when app is open/backgrounded) ---
     useEffect(() => {
         const subscription = Notifications.addNotificationResponseReceivedListener(response => {
-            console.log("[NotificationTap] Notification response received:", response);
-            const notificationData = response.notification.request.content.data;
-            if (notificationData && user && navigationRef.isReady()) {
-                if (notificationData.type === 'private_message' && notificationData.chatId && notificationData.senderId) {
-                    navigationRef.navigate('PrivateChat', { recipientId: notificationData.senderId, recipientName: notificationData.senderName || "Chat" });
-                } else if (notificationData.type === 'new_offer' && notificationData.productId) {
-                    navigationRef.navigate('Details', { productId: notificationData.productId });
-                } else if ((notificationData.type === 'offer_accepted' || notificationData.type === 'offer_rejected') && notificationData.productId) {
-                    navigationRef.navigate('Details', { productId: notificationData.productId });
-                }
+            const url = response.notification.request.content.data.url;
+            if (url) {
+                Linking.openURL(url);
             }
         });
         return () => subscription.remove();
-    }, [user, navigationRef]);
+    }, []);
     
-    // --- Navigators (no changes needed to the navigator structure itself) ---
+    // --- Navigator Definitions ---
     function AuthNavigator() {
         return (
             <AuthStack.Navigator screenOptions={{ headerShown: false }}>
@@ -141,9 +157,7 @@ const ThemedNavigation = () => {
     }
 
     function MainTabNavigator() {
-        // We need to pass the current user's UID to the ProfileTab
         const currentUserId = auth().currentUser?.uid;
-
         return (
             <Tab.Navigator
                 screenOptions={({ route }) => ({
@@ -155,6 +169,7 @@ const ThemedNavigation = () => {
                     tabBarIcon: ({ focused, color, size }) => {
                         let iconName;
                         if (route.name === 'HomeTab') iconName = focused ? 'home' : 'home-outline';
+                        else if (route.name === 'MapTab') iconName = focused ? 'map' : 'map-outline';
                         else if (route.name === 'WishlistTab') iconName = focused ? 'heart' : 'heart-outline';
                         else if (route.name === 'ChatBotTab') iconName = focused ? 'chatbubble-ellipses' : 'chatbubble-ellipses-outline';
                         else if (route.name === 'ChatListTab') iconName = focused ? 'chatbubbles' : 'chatbubbles-outline';
@@ -164,8 +179,9 @@ const ThemedNavigation = () => {
                 })}
             >
                 <Tab.Screen name="HomeTab" component={HomeScreen} options={{ title: 'Home', headerShown: false }} />
+                <Tab.Screen name="MapTab" component={MapScreen} options={{ title: 'Map View' }} />
                 <Tab.Screen name="WishlistTab" component={WishlistScreen} options={{ title: 'Wishlist' }} />
-                <Tab.Screen name="ChatBotTab" component={ChatBotScreen} options={{ title: 'Chat Bot' }} />
+                <Tab.Screen name="ChatBotTab" component={ChatBotScreen} options={{ title: 'AI Assistant' }} />
                 <Tab.Screen name="ChatListTab" component={ChatListScreen} options={{ title: 'Chats' }} />
                 <Tab.Screen name="ProfileTab" component={UserProfileScreen} initialParams={{ userId: currentUserId }} options={{ title: 'My Profile' }} />
             </Tab.Navigator>
@@ -192,6 +208,8 @@ const ThemedNavigation = () => {
                 <AppStack.Screen name="SellerStore" component={UserProfileScreen} />
                 <AppStack.Screen name="Notifications" component={NotificationsScreen} />
                 <AppStack.Screen name="FollowListScreen" component={FollowListScreen} />
+                <AppStack.Screen name="SavedSearches" component={SavedSearchesScreen} options={{ title: 'My Saved Searches' }} />
+                <AppStack.Screen name="Analytics" component={AnalyticsScreen} options={{ title: 'Performance Dashboard' }} />
             </AppStack.Navigator>
         );
     }
@@ -204,13 +222,13 @@ const ThemedNavigation = () => {
     if (initializing) {
         return (
             <View style={styles.loadingContainer}>
-                <ActivityIndicator size="large" color={colors.primaryTeal} />
+                <ActivityIndicator size="large" color={colors?.primaryTeal || '#008080'} />
             </View>
         );
     }
 
     return (
-        <NavigationContainer theme={navigationTheme} ref={navigationRef}>
+        <NavigationContainer theme={navigationTheme} ref={navigationRef} linking={linking}>
             <StatusBar barStyle={isDarkMode ? 'light-content' : 'dark-content'} />
             {user ? <AppNavigator /> : <AuthNavigator />}
         </NavigationContainer>
